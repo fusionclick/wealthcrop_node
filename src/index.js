@@ -25,7 +25,7 @@ app.use(express.json());
 
 // Routes
 app.use("/", rootRoute);
-app.use("/api/nse", require("./route/all-routes/NseRoutes"));
+// app.use("/api/nse", require("./route/all-routes/NseRoutes"));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Listening on port ${port}`));

@@ -62,5 +62,6 @@ router.post("/sendPaymentInfo", StarMFController.sendPaymentInfo);
 //Nav Routes
 router.post("/getNavMasterList", StarMFController.getNavMasterList);
 router.post("/getSchemeReturns", StarMFController.getSchemeReturns);
+router.get("/test-api", StarMFController.testAPI);
 
 module.exports = router;

@@ -1237,7 +1237,9 @@ class StarMFController {
     }
     return response;
   }
-
+  async testAPI() {
+    return { msg : "API is working fine" };
+  }
 }
 
 // Export an instance of the class
