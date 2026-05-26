@@ -130,175 +130,115 @@ class StarMFController {
 
       // Prepare the specific structure required by BSE
       const bseBody = {
-        "data": {
-          "member_code": {
-            "member_id": "91010"
-          },
-          "investor": {
-            "client_code": client_code || "FOFTest1"
-          },
-          "parent_client_code": "",
-          "tax_code": tax_code,
-          "holding_nature": holding_nature,
-          "is_multi_ucc": false,
-          "rdmp_idcw_pay_mode": "01",
-          "is_client_physical": false,
-          "is_client_demat": true,
-          "is_nomination_opted": false,
-          "nomination_auth_mode": "O",
-          "comm_mode": "P",
-          "onboarding": "Z",
-          "holder": [
-            {
-              "holder_rank": "1",
-              "occ_code": "02",
-              "auth_mode": "M",
-              "is_pan_exempt": false,
-              "pan_exempt_category": "",
-              "identifier": [
-                {
-                  "identifier_type": "pan",
-                  "identifier_number": pan || "NYTPA0008A",
-                  "issue_date": "",
-                  "expiry_date": "",
-                  "file_name": "",
-                  "file_size": 0,
-                  "file_blob": "",
-                  "additional_info": ""
-                }
-              ],
-              "kyc_type": "K",
-              "ckyc_number": ckyc_number,
-              "person": {
-                "first_name": first_name || "vaibhav",
-                "middle_name": middle_name || "rajan",
-                "last_name": last_name || "shirsath",
-                "dob": dob || "2000-01-12",
-                "gender": ""
+          "data": {
+              "investor": {
+                  "client_code": client_code || "FOFTest1"
               },
-              "contact": [
-                {
-                  "contact_number": mobile || "9912345678",
-                  "country_code": "91",
-                  "whose_contact_number": "SE",
-                  "email_address": email || "v2001@gmail.com",
-                  "whose_email_address": "SE",
-                  "contact_type": "PR"
-                }
-              ]
-            }
-          ],
-          "comm_addr": {
-            "address_line_1": address.line1 || "Flat No. 102, ABC Apartments",
-            "address_line_2": address.line2 || "Gangapur Road",
-            "address_line_3": address.line3 || "Nashik, Maharashtra 422005",
-            "postalcode": address.pincode || "400010"
-          },
-          "depository": depository.length ? depository : [
-            {
-              "depository_code": "CDSL",
-              "dp_id": "12345678",
-              "client_id": "78121130",
-              "bank_account": bank.acc_no || "6986598569865",
-              "account_owner": "SELF",
-              "identifier": []
-            }
-          ],
-          "bank_account": [
-            {
-              "ifsc_code": bank.ifsc || "UTIB0000004",
-              "bank_acc_num": bank.acc_no || "6986598569865",
-              "bank_acc_type": bank.acc_type || "CB",
-              "account_owner": "SELF",
-              "identifier": []
-            }
-          ],
-          "fatca": [
-            {
-              "HolderRank": "1",
-              "place_of_birth": req.body.place_of_birth || "New York City",
-              "country_of_birth": "IND",
-              "client_name": first_name || "vaibhav",
-              "investor_type": "Non-Individual",
-              "dob": dob || "2000-01-12",
-              "giin_no": "ABC123.DEF45.GH.678",
-              "ffi_drnfe": "NA",
-              "address_type": "1",
-              "occ_code": "01",
-              "occ_type": "B",
-              "tax_status": "Mutual Funds FOF Schemes",
-              "nfe_category": "RL",
-              "exemption_code": "A",
-              "identifier": {
-                "identifier_type": "pan",
-                "identifier_number": pan || "NYTPA0008A"
-              },
-              "giin_exempt_category": "1",
-              "is_giin_avail": "NR",
-              "spr_name": "Example Financial Institution",
-              "nfe_sub_category": "1",
-              "exchange_name": "B",
-              "listed_org_related": "Example Related Organization",
-              "nature_of_business": "Financial Services",
-              "nature_of_relation": "SU",
-              "corporate_service_sector": "1",
-              "wealth_source": "1",
-              "income_slab": "31",
-              "net_worth": 125000.00,
-              "date_of_net_worth": "2022-02-23",
-              "politically_exposed": "Y",
-              "is_self_declared": true,
-              "data_source": "P",
-              "tax_residency": [
-                {
-                  "country": "IND",
-                  "tax_id_no": pan || "1234567890",
-                  "tax_id_type": "A"
-                }
-              ],
-              "ubo": {
-                "is_ubo_applicable": true,
-                "ubo_count": 1,
-                "ubo_detail": [
+              "pms_client": false,
+              "pms_code": "",
+              "holding_nature": "SI",
+              "tax_code": "01",
+              "rdmp_idcw_pay_mode": "02",
+              "is_client_physical": false,
+              "is_client_demat": true,
+              "is_nomination_opted": false,
+              "nomination_auth_mode": "O",
+              "comm_mode": "E",
+              "onboarding": "Z",
+              "holder": [
                   {
-                    "person": {
-                      "name": first_name || "Joey",
-                      "gender": "M",
-                      "tax_residency": [
-                        {
-                          "country": "IND",
-                          "tax_id_no": pan || "NKAPT65656",
-                          "tax_id_type": "A"
-                        }
+                      "holder_rank": "1",
+                      "occ_code": "02",
+                      "auth_mode": "M",
+                      "is_pan_exempt": false,
+                      "pan_exempt_category": "",
+                      "identifier": [
+                          {
+                              "identifier_type": "pan",
+                              "identifier_number": pan || "NYTPA0008A"
+                          },
+                          {
+                              "identifier_type": "accredited_investor",
+                              "identifier_number": "9884520120",
+                              "expiry_date": "2028-02-23"
+                          }
                       ],
-                      "occ_code": "01",
-                      "occ_type": "B"
-                    },
-                    "ubo_type_code": "C01",
-                    "address": {
-                      "postalcode": address.pincode || "400037",
-                      "city": address.city || "Mumbai",
-                      "state": address.state || "Maharashtra",
-                      "country": "INDIA",
-                      "address_type": "COMM_ADDR",
-                      "mobile": mobile || "909090909"
-                    },
-                    "pan": pan || "NKAPT65656",
-                    "ubo_declaration_flag": "true",
-                    "exchange_name": "",
-                    "iB": "",
-                    "name_of_realted_listed_company": "",
-                    "ubo_category": "SMO",
-                    "politically_exposed": "N",
-                    "ubo_email_id": "",
-                    "smo_designation": "TECHIE"
+                      "kyc_type": "K",
+                      "ckyc_number": "",
+                      "person": {
+                          "first_name": first_name || "vaibhav",
+                          "middle_name": middle_name || "rajan",
+                          "last_name": last_name || "shirsath",
+                          "dob": dob || "2000-01-12",
+                          "gender": "M"
+                      },
+                      "contact": [
+                          {
+                              "contact_number": mobile || "9912345678",
+                              "country_code": "91",
+                              "whose_contact_number": "SE",
+                              "email_address": email || "v2001@gmail.com",
+                              "whose_email_address": "SE",
+                              "contact_type": "PR"
+                          }
+                      ]
                   }
-                ]
+              ],
+              "comm_addr": {
+                  "address_line_1":  address.line1 || "Flat No. 102, ABC Apartments",
+                  "city": address.line2 || "DEHRADUN",
+                  "state": address.line3 || "UTTARANCHAL",
+                  "postalcode": address.pincode || "248001",
+                  "country": "INDIA"
               },
-              "npo": {}
-            }
-          ]
-        }
+              "depository": [
+                  {
+                      "depository_code": "CDSL",
+                      "dp_id": "12345678",
+                      "client_id": "12345678",
+                      "bank_account": bank.acc_no || "6986598569865",
+                      "account_owner": "SELF"
+                  }
+              ],
+              "bank_account": [
+                  {
+                      "ifsc_code": bank.ifsc || "UTIB0000004",
+                      "bank_acc_num": bank.acc_no || "6986598569865",
+                      "bank_acc_type": bank.acc_type || "SB",
+                      "account_owner": "SELF"
+                  }
+              ],
+              "fatca": [
+                  {
+                      "holder_rank": "1",
+                      "place_of_birth": req.body.place_of_birth || "New York City",
+                      "country_of_birth": "IND",
+                      "client_name": first_name || "vaibhav",
+                      "investor_type": "Individual",
+                      "dob": dob || "2000-01-12",
+                      "address_type": "1",
+                      "occ_code": "01",
+                      "occ_type": "B",
+                      "tax_status": "Individual",
+                      "identifier": {
+                          "identifier_type": "pan",
+                          "identifier_number": pan || "NYTPA0008A"
+                      },
+                      "wealth_source": "1",
+                      "income_slab": "32",
+                      "politically_exposed": "N",
+                      "is_self_declared": true,
+                      "data_source": "P",
+                      "tax_residency": [
+                          {
+                              "country": "IND",
+                              "tax_id_no": pan || "NYTPA0008A",
+                              "tax_id_type": "C"
+                          }
+                      ]
+                  }
+              ]
+          }
       };
 
       console.log("Sending to BSE Demo:", JSON.stringify(bseBody, null, 2));
