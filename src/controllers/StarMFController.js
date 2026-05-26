@@ -111,7 +111,7 @@ class StarMFController {
         this.bseToken = loginResp.data?.data?.access_token || loginResp.data?.token;
       }
       return res.json({
-          msg: "API is working fine",
+          msg: "API is working fine test ucc",
           makeRequest
       });
       const {
