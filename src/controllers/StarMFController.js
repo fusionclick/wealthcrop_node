@@ -1237,8 +1237,10 @@ class StarMFController {
     }
     return response;
   }
-  async testAPI() {
-    return { msg : "API is working fine" };
+  async testAPI(req, res) {
+    return res.json({
+        msg: "API is working fine"
+    });
   }
 }
 
