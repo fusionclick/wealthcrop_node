@@ -22,7 +22,7 @@ router.post("/getAllXsp", StarMFController.getAllXsp);
 router.post("/topupXsp", StarMFController.topupXsp);
 router.post("/resumeXsp", StarMFController.resumeXsp);
 router.post("/getXspTrxnHistory", StarMFController.getXspTrxnHistory);
-router.post("/purchaseNewOrder", StarMFController.purchaseNewOrder);
+router.post("/api/purchaseNewOrder", StarMFController.purchaseNewOrder);
 router.post("/updatePurchaseOrder", StarMFController.updatePurchaseOrder);
 router.post("/getAllOrders", StarMFController.getAllOrders);
 router.post("/getOrder", StarMFController.getOrder);
