@@ -122,6 +122,8 @@ class StarMFController {
         mobile,
         email,
         pan,
+        dp_id,
+        client_id,
         ckyc_number = "12341876543232",
         address = {},
         bank = {},
@@ -194,8 +196,8 @@ class StarMFController {
               "depository": [
                   {
                       "depository_code": "CDSL",
-                      "dp_id": "12345678",
-                      "client_id": "12345678",
+                      "dp_id": dp_id || "12345678",
+                      "client_id": client_id || "12345678",
                       "bank_account": bank.acc_no || "6986598569865",
                       "account_owner": "SELF"
                   }
