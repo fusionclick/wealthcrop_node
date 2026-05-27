@@ -620,7 +620,10 @@ class StarMFController {
         if (category && !isSpecialCategory) reqObj.data.filter_param.scheme_category = category;
       }
     }
-    return { "token" : this.accessToken, "mes" : "Testing" }
+    return res.json({
+        token: this.accessToken,
+        mes: "Testing"
+    });
     try {
       if (!this.accessToken) await this.loginFunc();
 
