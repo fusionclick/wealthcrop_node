@@ -291,9 +291,7 @@ class StarMFController {
 
   async executeWithRetry(serviceInstance, serviceMethod, reqObj, res) {
     let loginResp;
-    if (this.accessToken == null) {
-      loginResp = await this.loginFunc();
-    }
+    loginResp = await this.loginFunc();
     if (loginResp?.status === "error") {
       return res.json(loginResp);
     }
