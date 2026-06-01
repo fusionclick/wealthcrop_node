@@ -25,7 +25,7 @@ router.post("/getXspTrxnHistory", StarMFController.getXspTrxnHistory);
 router.post("/api/purchaseNewOrder", StarMFController.purchaseNewOrder);
 router.post("/updatePurchaseOrder", StarMFController.updatePurchaseOrder);
 router.post("/getAllOrders", StarMFController.getAllOrders);
-router.post("/getOrder", StarMFController.getOrder);
+router.post("/api/getOrder", StarMFController.getOrder);
 router.post("/cancelPurchaseOrder", StarMFController.cancelPurchaseOrder);
 router.post("/listPaymentDetail", StarMFController.listPaymentDetail);
 router.post("/getPaymentDetail", StarMFController.getPaymentDetail);
