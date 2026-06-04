@@ -1187,7 +1187,13 @@ class StarMFController {
   }
   // Get payment link for an order function
   getPaymentLink = async (req, res) => {
+    let loginResp;
+    loginResp = await this.loginFunc();
+    if (loginResp?.status === "error") {
+      return res.json(loginResp);
+    }
     return res.json({
+      accessToken: this.accessToken,
       req_body: req.body,
       msg: "This is a placeholder response for getPaymentLink. Implement the logic to fetch payment link based on order details."
     });
