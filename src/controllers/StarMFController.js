@@ -1187,17 +1187,37 @@ class StarMFController {
   }
   // Get payment link for an order function
   getPaymentLink = async (req, res) => {
-    let loginResp;
-    loginResp = await this.loginFunc();
-    if (loginResp?.status === "error") {
-      return res.json(loginResp);
+    try {
+      const loginResp = await this.loginFunc();
+
+      if (loginResp?.status === "error") {
+        return res.json(loginResp);
+      }
+
+      const response = await axios.post(
+        `https://starmfv2demo.bseindia.com/api/get_exchpg_service`,
+        req.body,
+        {
+          headers: {
+            Authorization: `Bearer ${this.accessToken}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      return res.json(response.data);
+    } catch (error) {
+      console.error(
+        "Payment Link Error:",
+        error.response?.data || error.message
+      );
+
+      return res.status(500).json({
+        status: "error",
+        message: error.response?.data || error.message,
+      });
     }
-    return res.json({
-      accessToken: this.accessToken,
-      req_body: req.body,
-      msg: "This is a placeholder response for getPaymentLink. Implement the logic to fetch payment link based on order details."
-    });
-  }
+  };
 }
 
 // Export an instance of the class
