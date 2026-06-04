@@ -1195,7 +1195,7 @@ class StarMFController {
       }
 
       const response = await axios.post(
-        `${configData.baseUrl}/get_exchpg_service`,
+        `${this.baseUrl}/get_exchpg_service`,
         req.body,
         {
           headers: {
