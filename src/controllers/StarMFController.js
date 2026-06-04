@@ -1185,6 +1185,13 @@ class StarMFController {
         msg: "API is working fine"
     });
   }
+  // Get payment link for an order function
+  getPaymentLink = async (req, res) => {
+    return res.json({
+      req_body: req.body,
+      msg: "This is a placeholder response for getPaymentLink. Implement the logic to fetch payment link based on order details."
+    });
+  }
 }
 
 // Export an instance of the class
