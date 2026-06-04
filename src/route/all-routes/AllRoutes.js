@@ -64,7 +64,7 @@ router.post("/getNavMasterList", StarMFController.getNavMasterList);
 router.post("/getSchemeReturns", StarMFController.getSchemeReturns);
 
 // Get payment link for orders
-router.post("/get-payment-link", StarMFController.getPaymentLink);
+router.post("/api/get-payment-link", StarMFController.getPaymentLink);
 router.get("/test-api", StarMFController.testAPI);
 
 module.exports = router;

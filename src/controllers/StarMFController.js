@@ -1195,7 +1195,7 @@ class StarMFController {
       }
 
       const response = await axios.post(
-        `https://starmfv2demo.bseindia.com/api/get_exchpg_service`,
+        `${this.bseDemoUrl}/get_exchpg_service`,
         req.body,
         {
           headers: {
@@ -1207,8 +1207,6 @@ class StarMFController {
 
       return res.json({
         response: response.data,
-        baseUrl: this.baseUrl,
-        bseDemoUrl: this.bseDemoUrl,
       });
     } catch (error) {
       console.error(
