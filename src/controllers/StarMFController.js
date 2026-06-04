@@ -1205,7 +1205,11 @@ class StarMFController {
         }
       );
 
-      return res.json(response.data);
+      return res.json({
+        response: response.data,
+        baseUrl: this.baseUrl,
+        bseDemoUrl: this.bseDemoUrl,
+      });
     } catch (error) {
       console.error(
         "Payment Link Error:",
