@@ -57,6 +57,7 @@ router.post("/mandateDelink", StarMFController.mandateDelink);
 router.post("/updateMandate", StarMFController.updateMandate);
 router.post("/getExchPgService", StarMFController.getExchPgService);
 router.post("/sendPaymentInfo", StarMFController.sendPaymentInfo);
+router.post("/api/mandate_register/upi-autopay", StarMFController.mandateRegisterUpiAutoPay);
 
 
 //Nav Routes

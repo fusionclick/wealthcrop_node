@@ -1220,6 +1220,41 @@ class StarMFController {
       });
     }
   };
+
+  // mandate register upi autopay
+  mandateRegisterUpiAutoPay = async (req, res) => {
+    try {
+      const loginResp = await this.loginFunc();
+
+      if (loginResp?.status === "error") {
+        return res.json(loginResp);
+      }
+      const response = await axios.post(
+        `${this.bseDemoUrl}/mandate_register`,
+        req.body,
+        {
+          headers: {
+            Authorization: `Bearer ${this.accessToken}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      return res.json({
+        response: response.data,
+      });
+    }catch (error) {
+      console.error(
+        "Mandate Register UPI Auto Pay Error:",
+        error.response?.data || error.message
+      );
+
+      return res.status(500).json({
+        status: "error",
+        message: error.response?.data || error.message,
+      });
+    }
+  }
 }
 
 // Export an instance of the class
