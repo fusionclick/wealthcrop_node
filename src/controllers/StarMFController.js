@@ -427,10 +427,7 @@ class StarMFController {
     let reqObj = uccRequestData.getAllUcc;
     return this.handleUccRequest("getAllUcc", reqObj, res);
   };
-  getParticularUcc = async (req, res) => {
-    let reqObj = uccRequestData.getParticularUcc;
-    return this.handleUccRequest("getParticularUcc", reqObj, res);
-  };
+  
   createPhysicalUcc = async (req, res) => {
     const reqObj = req.body && Object.keys(req.body).length ? req.body : uccRequestData.createPhysicalUcc;
     return this.handleUccRequest("createPhysicalUcc", reqObj, res);
@@ -1255,6 +1252,39 @@ class StarMFController {
       });
     }
   }
+  getParticularUcc = async (req, res) => {
+    try {
+      const loginResp = await this.loginFunc();
+
+      if (loginResp?.status === "error") {
+        return res.json(loginResp);
+      }
+      const response = await axios.post(
+        `${this.bseDemoUrl}/v2/get_ucc`,
+        req.body,
+        {
+          headers: {
+            Authorization: `Bearer ${this.accessToken}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      return res.json({
+        response: response.data,
+      });
+    }catch (error) {
+      console.error(
+        "Ucc error",
+        error.response?.data || error.message
+      );
+
+      return res.status(500).json({
+        status: "error",
+        message: error.response?.data || error.message,
+      });
+    }
+  };
 }
 
 // Export an instance of the class
