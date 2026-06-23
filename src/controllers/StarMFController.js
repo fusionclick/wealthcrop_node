@@ -99,6 +99,40 @@ class StarMFController {
 
   // Direct Axios BSE Add UCC
   addUcc = async (req, res) => {
+    const {
+      client_code,
+      first_name,
+      middle_name = "",
+      last_name,
+      dob,
+      mobile,
+      email,
+      pan,
+      dp_id,
+      client_id,
+      address = {},
+      bank = {},
+    } = req.body;
+
+    // T1.5 — Validate address.line1 minimum 8 chars (before any BSE call)
+    if (!address.line1 || address.line1.trim().length < 8) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        field: 'address.line1',
+        message: 'Address line 1 must be at least 8 characters'
+      });
+    }
+
+    // T1.6 — Validate pincode is a valid 6-digit India postal code
+    const PINCODE_REGEX = /^[1-9][0-9]{5}$/;
+    if (!address.pincode || !PINCODE_REGEX.test(address.pincode)) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        field: 'address.pincode',
+        message: 'Pincode must be a valid 6-digit India postal code'
+      });
+    }
+
     const makeRequest = async () => {
       if (!this.bseToken) {
         // Auto login if no token
@@ -110,25 +144,6 @@ class StarMFController {
         });
         this.bseToken = loginResp.data?.data?.access_token || loginResp.data?.token;
       }
-      
-      const {
-        client_code,
-        tax_code = "36",
-        holding_nature = "SI",
-        first_name,
-        middle_name = "",
-        last_name,
-        dob,
-        mobile,
-        email,
-        pan,
-        dp_id,
-        client_id,
-        ckyc_number = "12341876543232",
-        address = {},
-        bank = {},
-        depository = []
-      } = req.body;
 
       // Prepare the specific structure required by BSE
       const bseBody = {
@@ -187,9 +202,9 @@ class StarMFController {
                   }
               ],
               "comm_addr": {
-                  "address_line_1":  address.line1 || "Flat No. 102, ABC Apartments",
-                  "city": address.line2 || "DEHRADUN",
-                  "state": address.line3 || "UTTARANCHAL",
+                  "address_line_1": address.line1 || "Flat No. 102, ABC Apartments",
+                  "address_line_2": address.line2 || "Rajpur Road",
+                  "address_line_3": address.line3 || "Uttarakhand",
                   "postalcode": address.pincode || "248001",
                   "country": "INDIA"
               },
@@ -270,10 +285,31 @@ class StarMFController {
           return res.json(responseData);
         } catch (retryError) {
           console.error("BSE ERROR DETAILS AFTER RETRY:", JSON.stringify(retryError.response?.data, null, 2));
+          const retryBseMessages = retryError.response?.data?.messages || [];
+          if (retryBseMessages.length > 0) {
+            const BSE_ERROR_MAP = {
+              526: { field: 'address.line1', message: 'Address line 1 is too short — minimum 8 characters required', fix: 'Enter a more detailed address' },
+              560: { field: 'address.pincode', message: 'Invalid pincode — this postal code does not exist in India', fix: 'Use a valid 6-digit India pincode' },
+            };
+            const mappedErrors = retryBseMessages.map(msg => BSE_ERROR_MAP[msg.msgid] || { field: msg.field, message: msg.errcode, fix: 'Check the field and try again' });
+            return res.status(400).json({ error: 'BSE validation failed', errors: mappedErrors, raw: retryBseMessages });
+          }
           return res.status(500).json({ error: 'Failed to add UCC at BSE Demo after retry', details: retryError.response?.data || retryError.message });
         }
       }
       console.error("BSE ERROR DETAILS:", JSON.stringify(error.response?.data, null, 2));
+
+      // T1.9 — Map BSE error codes to user-friendly messages
+      const bseMessages = error.response?.data?.messages || [];
+      if (bseMessages.length > 0) {
+        const BSE_ERROR_MAP = {
+          526: { field: 'address.line1', message: 'Address line 1 is too short — minimum 8 characters required', fix: 'Enter a more detailed address (e.g. "Flat 12, Green Park Society")' },
+          560: { field: 'address.pincode', message: 'Invalid pincode — this postal code does not exist in India', fix: 'Use a valid 6-digit India pincode (e.g. 700091)' },
+        };
+        const mappedErrors = bseMessages.map(msg => BSE_ERROR_MAP[msg.msgid] || { field: msg.field, message: msg.errcode, fix: 'Check the field and try again' });
+        return res.status(400).json({ error: 'BSE validation failed', errors: mappedErrors, raw: bseMessages });
+      }
+
       res.status(500).json({ error: 'Failed to add UCC at BSE Demo', details: error.response?.data || error.message });
     }
   };

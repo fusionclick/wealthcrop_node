@@ -5,6 +5,7 @@ const router = require("express").Router();
 router.post("/login", StarMFController.loginRequest);
 router.post("/api/login", StarMFController.login);
 router.post("/v2/add_ucc", StarMFController.addUcc);
+router.post("/api/v2/add_ucc", StarMFController.addUcc);
 router.post("/getAllUcc", StarMFController.getAllUcc);
 router.post("/getparticularucc", StarMFController.getParticularUcc);
 router.post("/createPhysicalUcc", StarMFController.createPhysicalUcc);
