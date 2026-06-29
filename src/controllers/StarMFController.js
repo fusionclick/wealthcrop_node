@@ -546,37 +546,37 @@ class StarMFController {
 
   // XSP Methods
   xspRegister = async (req, res) => {
-    let reqObj = xspRequestData.xspRegisterData;
+    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.xspRegisterData;
     return this.handleTrxnRequest("xspRegister", reqObj, res);
   };
   getXsp = async (req, res) => {
-    let reqObj = xspRequestData.getXspData;
+    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.getXspData;
     return this.handleTrxnRequest("getXsp", reqObj, res);
   };
   pauseXsp = async (req, res) => {
-    let reqObj = xspRequestData.pauseXspData;
+    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.pauseXspData;
     return this.handleTrxnRequest("pauseXsp", reqObj, res);
   };
   cancelXsp = async (req, res) => {
-    let reqObj = xspRequestData.cancelXspData;
+    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.cancelXspData;
     return this.handleTrxnRequest("cancelXsp", reqObj, res);
   };
   getAllXsp = async (req, res) => {
-    let reqObj = xspRequestData.getAllXspData;
+    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.getAllXspData;
     return this.handleTrxnRequest("getAllXsp", reqObj, res);
   };
   topupXsp = async (req, res) => {
-    let reqObj = xspRequestData.topupXspData;
+    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.topupXspData;
     return this.handleTrxnRequest("topupXsp", reqObj, res);
   };
 
   resumeXsp = async (req, res) => {
-    let reqObj = xspRequestData.resumeXsp;
+    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.resumeXsp;
     return this.handleTrxnRequest("resumeXsp", reqObj, res);
   };
 
   getXspTrxnHistory = async (req, res) => {
-    let reqObj = xspRequestData.getXspTrxnHistory;
+    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.getXspTrxnHistory;
     return this.handleTrxnRequest("getXspTrxnHistory", reqObj, res);
   };
 
@@ -753,13 +753,15 @@ class StarMFController {
         const isEquity = name.toLowerCase().includes("equity") || (category && category.toLowerCase().includes("equity"));
         const avgReturn = (returns["1Y"] || 15);
 
+        // ponytail: deterministic proxies — real ratios need a data vendor
+        const seed = bseCode ? bseCode.toString().split('').reduce((a, c) => a + c.charCodeAt(0), 0) : index;
         const advancedRatios = {
           top5: isEquity ? "32.45%" : "48.12%",
           top20: isEquity ? "65.20%" : "82.40%",
-          peRatio: isEquity ? (Math.random() * 10 + 20).toFixed(2) : "N/A",
-          pbRatio: isEquity ? (Math.random() * 3 + 3).toFixed(2) : "N/A",
-          alpha: (avgReturn / 10 + (Math.random() * 2 - 1)).toFixed(2),
-          beta: isEquity ? (0.9 + (Math.random() * 0.4 - 0.2)).toFixed(2) : (0.1 + (Math.random() * 0.2)).toFixed(2),
+          peRatio: isEquity ? (20 + (seed % 15)).toFixed(2) : "N/A",
+          pbRatio: isEquity ? (3 + (seed % 4)).toFixed(2) : "N/A",
+          alpha: (avgReturn / 10).toFixed(2),
+          beta: isEquity ? "1.00" : "0.15",
           sharpe: (avgReturn / 12).toFixed(2),
           sortino: (avgReturn / 10).toFixed(2)
         };
@@ -770,8 +772,8 @@ class StarMFController {
           subType: itemSubType,
           category: itemSubType.split(" • ")[0],
           nav: currentNavVal || 0,
-          fundSize: `₹${(Math.floor(Math.random() * 9000) + 1000).toLocaleString("en-IN")} Cr`,
-          expense: `${(Math.random() * 1.2 + 0.3).toFixed(2)}%`,
+          fundSize: scheme.aum ? `₹${Number(scheme.aum).toLocaleString("en-IN")} Cr` : `₹${(1000 + (seed % 9000)).toLocaleString("en-IN")} Cr`,
+          expense: scheme.expense_ratio ? `${Number(scheme.expense_ratio).toFixed(2)}%` : `${(0.3 + (seed % 13) / 10).toFixed(2)}%`,
           minSip: parseFloat(scheme.sip_min_amount || 500),
           minLumpsum: parseFloat(scheme.min_lumpsum_amount || 1000),
           annualRates: {
@@ -870,13 +872,29 @@ class StarMFController {
       const scheme = schemesRes.data.lists[0];
       const name = scheme.name || scheme.scheme_name;
 
-      // 2. Fetch Current NAV
-      const navRes = await this.fetchNavsForDate(new Date());
-      const navMap = this.createNavMap(navRes?.data?.lists || []);
-      const currentNav = parseFloat(navMap[isin || scheme_code]?.nav || 150.00);
+      // 2. Fetch NAVs for multiple anchor dates (real BSE data)
+      const today = new Date();
+      const getPastDate = (y) => { const d = new Date(); d.setFullYear(today.getFullYear() - y); return d; };
+      const [navToday, nav1Y, nav3Y, nav5Y] = await Promise.all([
+        this.fetchNavsForDate(today),
+        this.fetchNavsForDate(getPastDate(1)),
+        this.fetchNavsForDate(getPastDate(3)),
+        this.fetchNavsForDate(getPastDate(5)),
+      ]);
+      const lookup = (navRes) => {
+        const m = this.createNavMap(navRes?.data?.lists || []);
+        return parseFloat(m[isin]?.nav || m[scheme_code]?.nav || 0);
+      };
+      const currentNav = lookup(navToday) || 150;
+      const navAnchors = {
+        today: currentNav,
+        "1Y": lookup(nav1Y) || null,
+        "3Y": lookup(nav3Y) || null,
+        "5Y": lookup(nav5Y) || null,
+      };
 
-      // 3. Generate Chart Data (Simulated for 10 years based on current NAV)
-      const chartData = this.generateHistoricalNavData(currentNav);
+      // 3. Build chart data interpolated between real anchor NAVs
+      const chartData = this.generateHistoricalNavData(currentNav, navAnchors);
 
       return res.json({
         status: "success",
@@ -899,9 +917,11 @@ class StarMFController {
   };
 
   /**
-   * Helper to generate realistic looking historical NAV data
+   * Build chart data using real BSE anchor NAVs where available,
+   * linearly interpolating between known points.
+   * ponytail: daily random walk removed — real anchors + linear interp
    */
-  generateHistoricalNavData(currentNav) {
+  generateHistoricalNavData(currentNav, anchors = {}) {
     const periods = {
       "30D": 30,
       "3M": 90,
@@ -917,28 +937,26 @@ class StarMFController {
     const now = Math.floor(Date.now() / 1000);
     const daySeconds = 86400;
 
+    // Pick the best real start NAV for each period
+    const realStart = (days) => {
+      if (days <= 365 && anchors["1Y"]) return anchors["1Y"];
+      if (days <= 1095 && anchors["3Y"]) return anchors["3Y"];
+      if (days <= 1825 && anchors["5Y"]) return anchors["5Y"];
+      // Fallback: back-calculate from 12% annual growth
+      return currentNav / Math.pow(1.12, days / 365);
+    };
+
     Object.keys(periods).forEach(key => {
       const days = periods[key];
+      const startNav = realStart(days);
       const data = [];
-      let lastNav = currentNav;
 
-      // Calculate start NAV based on period (assuming ~15% annual growth)
-      const annualReturn = 0.15;
-      const totalReturn = Math.pow(1 + annualReturn, days / 365);
-      let startNav = currentNav / totalReturn;
-
-      for (let i = 0; i < days; i++) {
+      for (let i = 0; i <= days; i++) {
         const timestamp = now - (days - i) * daySeconds;
-        // Add random daily volatility (0.5%)
-        const volatility = (Math.random() - 0.48) * 0.01;
-        startNav = startNav * (1 + volatility);
-        data.push({
-          timestamp: timestamp,
-          nav: parseFloat(startNav.toFixed(2))
-        });
+        // Linear interpolation between startNav and currentNav
+        const nav = parseFloat((startNav + ((currentNav - startNav) * i / days)).toFixed(2));
+        data.push({ timestamp, nav });
       }
-      // Ensure the last entry is exactly the current NAV
-      data[data.length - 1].nav = currentNav;
       response[key] = data;
     });
 
