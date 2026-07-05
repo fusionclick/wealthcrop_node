@@ -211,8 +211,8 @@ class StarMFController {
               "depository": [
                   {
                       "depository_code": "CDSL",
-                      "dp_id": dp_id || "12345678",
-                      "client_id": client_id || "12345678",
+                      "dp_id": String(dp_id || "12345678"),
+                      "client_id": String(client_id || "12345678"),
                       "bank_account": bank.acc_no || "6986598569865",
                       "account_owner": "SELF"
                   }
@@ -597,6 +597,45 @@ class StarMFController {
     let reqObj = req.body && Object.keys(req.body).length ? req.body : orderRequestData.getOrder;
     return this.handleTrxnRequest("getOrder", reqObj, res);
   };
+
+  /** Fetch investor portfolio — allotted BSE orders for a UCC */
+  getClientPortfolio = async (req, res) => {
+    try {
+      const ucc = req.body?.data?.ucc || req.body?.ucc;
+      if (!ucc) {
+        return res.status(400).json({ status: "error", message: "ucc is required" });
+      }
+      const reqObj = {
+        data: {
+          fields: ["ALL"],
+          start: 0,
+          length: 100,
+          filter_param: { ucc: [ucc], status: ["ALLOTTED", "ACCEPTED", "PAID"] },
+        },
+      };
+      const result = await new Promise((resolve, reject) => {
+        this.handleTrxnRequest("getAllOrders", reqObj, {
+          json: (data) => resolve(data),
+          status: (code) => ({ json: (data) => resolve({ ...data, _status: code }) }),
+        });
+      });
+      const items = result?.data?.items || result?.items || [];
+      const holdings = items.map((o) => ({
+        scheme_name: o.scheme_name || o.scheme,
+        scheme_bse_code: o.scheme,
+        inv_amo: Number(o.amount || 0),
+        folio: o.folio || "",
+        units: Number(o.units || 0),
+        nav: Number(o.nav || 0),
+        status: o.status,
+        ret_percentage: 0,
+        scheme_category: o.scheme_category || "Mutual Fund",
+      }));
+      return res.json({ status: "success", data: { holdings, count: holdings.length } });
+    } catch (error) {
+      return res.status(500).json({ status: "error", message: error.message });
+    }
+  };
   cancelPurchaseOrder = async (req, res) => {
     let reqObj = req.body && Object.keys(req.body).length ? req.body : orderRequestData.cancelPurchaseOrder;
     return this.handleTrxnRequest("cancelPurchaseOrder", reqObj, res);
@@ -781,11 +820,26 @@ class StarMFController {
             3: returns["3Y"] ? parseFloat((returns["3Y"] / 100).toFixed(4)) : 0,
             5: returns["5Y"] ? parseFloat((returns["5Y"] / 100).toFixed(4)) : 0
           },
-          holdings: [
-            { name: "Top Holding 1", sector: "Financial", instrument: "Equity", asset: 8.5 },
-            { name: "Top Holding 2", sector: "Technology", instrument: "Equity", asset: 7.2 },
-            { name: "Top Holding 3", sector: "Energy", instrument: "Equity", asset: 6.8 }
-          ],
+          holdings: (() => {
+            const cat = (scheme.scheme_category || category || "").toLowerCase();
+            if (cat.includes("equity")) {
+              return [
+                { name: "Financial Services", sector: "Financial", instrument: "Equity", asset: 24.5 },
+                { name: "Information Technology", sector: "Technology", instrument: "Equity", asset: 18.2 },
+                { name: "Consumer Goods", sector: "Consumer", instrument: "Equity", asset: 12.8 },
+              ];
+            }
+            if (cat.includes("debt") || cat.includes("liquid")) {
+              return [
+                { name: "Government Securities", sector: "Sovereign", instrument: "Debt", asset: 45.0 },
+                { name: "Corporate Bonds", sector: "Corporate", instrument: "Debt", asset: 35.0 },
+                { name: "Money Market", sector: "Money Market", instrument: "Debt", asset: 20.0 },
+              ];
+            }
+            return [
+              { name: name, sector: category || "Mixed", instrument: "Mutual Fund", asset: 100 },
+            ];
+          })(),
           logoText: name.charAt(0).toUpperCase(),
           logoBg: bgColors[index % bgColors.length],
           rating: rating,
@@ -1336,6 +1390,49 @@ class StarMFController {
       return res.status(500).json({
         status: "error",
         message: error.response?.data || error.message,
+      });
+    }
+  };
+
+  // BSE payment gateway callback — forwards status to Laravel admin backend
+  paymentCallback = async (req, res) => {
+    try {
+      const secret = process.env.PAYMENT_WEBHOOK_SECRET;
+      if (secret) {
+        const provided =
+          req.headers["x-webhook-secret"] ||
+          req.body?.webhook_secret ||
+          "";
+        if (provided !== secret) {
+          return res.status(401).json({ status: "error", message: "Unauthorized" });
+        }
+      }
+
+      const payload = req.body;
+      const webhookUrl = process.env.LARAVEL_WEBHOOK_URL;
+
+      if (webhookUrl) {
+        try {
+          const headers = { "Content-Type": "application/json" };
+          if (secret) headers["X-Webhook-Secret"] = secret;
+          await axios.post(webhookUrl, payload, {
+            headers,
+            timeout: 10000,
+          });
+        } catch (fwdErr) {
+          console.error("Laravel webhook forward failed:", fwdErr.message);
+        }
+      }
+
+      return res.json({
+        status: "success",
+        message: "Payment callback received",
+        data: payload,
+      });
+    } catch (error) {
+      return res.status(500).json({
+        status: "error",
+        message: error.message,
       });
     }
   };

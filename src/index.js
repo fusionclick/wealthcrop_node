@@ -3,30 +3,37 @@ const cors = require("cors");
 const dotenv = require("dotenv");
 const rootRoute = require("./route/root-route/rootRoute");
 
-//environment file
 dotenv.config();
 
 const app = express();
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-// CORS Configuration
-app.use(cors({
-  origin: ["http://localhost:5173"],                  // Sabhi origins allow hain (production mein specific domain set karein)
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-  credentials: false            // Agar cookies/auth use karni ho to true karein aur origin mein specific URL dein
-}));
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://wealthcrop.co",
+  "https://www.wealthcrop.co",
+  "https://wealthcrop.netlify.app",
+  process.env.FRONTEND_URL,
+].filter(Boolean);
 
-// Preflight requests handle karne ke liye
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    credentials: false,
+  })
+);
+
 app.options("*", cors());
-
-// Middleware to parse JSON
 app.use(express.json());
 
-// Routes
-app.use("/", rootRoute);
-// app.use("/api/nse", require("./route/all-routes/NseRoutes"));
+// All BSE routes live under /api — matches VITE_NODE_URL=http://host:3000/api
+app.use("/api", rootRoute);
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Listening on port ${port}`));
-
+app.listen(port, () => console.log(`WealthCrop BSE proxy listening on port ${port}`));
