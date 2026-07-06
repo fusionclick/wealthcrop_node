@@ -32,6 +32,20 @@ app.use(
 app.options("*", cors());
 app.use(express.json());
 
+// Dev request log — shows in this terminal (method, path, status, UI screen)
+if (process.env.NODE_ENV !== "production") {
+  app.use((req, res, next) => {
+    const start = Date.now();
+    const screen = req.headers["x-client-screen"] || "—";
+    res.on("finish", () => {
+      console.log(
+        `[Node] ${new Date().toLocaleTimeString()} ${req.method} ${req.originalUrl} → ${res.statusCode} (${Date.now() - start}ms) | UI: ${screen}`
+      );
+    });
+    next();
+  });
+}
+
 // All BSE routes live under /api — matches VITE_NODE_URL=http://host:3000/api
 app.use("/api", rootRoute);
 
