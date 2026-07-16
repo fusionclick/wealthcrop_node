@@ -8,27 +8,8 @@ dotenv.config();
 const app = express();
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-  "https://wealthcrop.co",
-  "https://www.wealthcrop.co",
-  "https://wealthcrop.netlify.app",
-  process.env.FRONTEND_URL,
-].filter(Boolean);
-
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error(`CORS blocked for origin: ${origin}`));
-    },
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
-    credentials: false,
-  })
-);
-
+// ponytail: open CORS; tighten origins if you turn credentials on
+app.use(cors());
 app.options("*", cors());
 app.use(express.json());
 
