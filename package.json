@@ -14,7 +14,6 @@
     "axios": "^1.7.9",
     "bse-starmfv2-sdk": "file:bse-starmfv2-sdk-1.0.0.tgz",
     "cors": "^2.8.6",
-    "dotenv": "^16.4.7",
     "express": "^4.21.2"
   }
 }
