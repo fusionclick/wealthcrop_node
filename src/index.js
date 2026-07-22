@@ -27,6 +27,12 @@ if (process.env.NODE_ENV !== "production") {
   });
 }
 
+// ponytail: BSE ko ping nahi karta — health check production API par load nahi daalna chahiye
+app.get("/health", (req, res) =>
+  res.json({ status: "ok", uptime: Math.round(process.uptime()) })
+);
+app.get("/", (req, res) => res.redirect("/health"));
+
 // All BSE routes live under /api — matches VITE_NODE_URL=http://host:3000/api
 app.use("/api", rootRoute);
 
