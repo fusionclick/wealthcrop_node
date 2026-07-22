@@ -1,0 +1,7 @@
+node_modules
+.git
+.env
+*.pdf
+*.md
+Dockerfile
+docker-compose.yml

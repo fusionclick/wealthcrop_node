@@ -1,0 +1,11 @@
+services:
+  api:
+    image: ghcr.io/fusionclick/wealthcrop_node:latest
+    restart: always
+    ports:
+      - "3000:3000"
+    env_file: .env          # server par rehti hai, image/git mein kabhi nahi
+
+# Auto-update watchtower se nahi, host ke systemd timer se hota hai:
+#   sudo bash deploy/install-autoupdate.sh
+# (watchtower Docker 29 ke saath API version ki wajah se chalta hi nahi)
