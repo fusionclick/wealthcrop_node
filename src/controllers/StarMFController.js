@@ -61,7 +61,8 @@ class StarMFController {
     this.baseUrl = configData.baseUrl;
     this.accessToken = null; //need to check for token expiration time
     this.tokenExpiry = "";
-    this.bseDemoUrl = 'https://starmfv2demo.bseindia.com/api';
+    // ponytail: follow BSE_BASE_URL (demo|prod) — was hardcoded demo while .env used prod
+    this.bseDemoUrl = `${String(configData.baseUrl).replace(/\/$/, "")}/api`;
     this.bseToken = '';
   }
 
