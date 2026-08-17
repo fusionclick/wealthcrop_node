@@ -6,7 +6,6 @@ const rootRoute = require("./route/root-route/rootRoute");
 dotenv.config();
 
 const app = express();
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 // ponytail: open CORS; tighten origins if you turn credentials on
 app.use(cors());

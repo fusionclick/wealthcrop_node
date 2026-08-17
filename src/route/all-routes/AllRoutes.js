@@ -1,47 +1,46 @@
 const StarMFController = require("../../controllers/StarMFController");
+const { requireInvestor, requireMatchingUcc } = require("../../middleware/requireInvestor");
 const router = require("express").Router();
 
-// Auth
-router.post("/login", StarMFController.loginRequest);
-router.post("/login/bse", StarMFController.login);
+const auth = [requireInvestor, requireMatchingUcc];
 
 // UCC
-router.post("/v2/add_ucc", StarMFController.addUcc);
-router.post("/getAllUcc", StarMFController.getAllUcc);
-router.post("/getparticularucc", StarMFController.getParticularUcc);
-router.post("/createPhysicalUcc", StarMFController.createPhysicalUcc);
-router.post("/createDematUcc", StarMFController.createDematUcc);
-router.post("/createBothUcc", StarMFController.createBothUcc);
-router.post("/updateUccAddress", StarMFController.updateUccAddress);
-router.post("/updateUccProfile", StarMFController.updateUccProfile);
-router.post("/updateUccUpdateBankData", StarMFController.updateUccUpdateBankData);
-router.post("/deactivateUcc", StarMFController.deactivateUcc);
+router.post("/v2/add_ucc", requireInvestor, StarMFController.addUcc);
+router.post("/getAllUcc", requireInvestor, StarMFController.getAllUcc);
+router.post("/getparticularucc", requireInvestor, StarMFController.getParticularUcc);
+router.post("/createPhysicalUcc", requireInvestor, StarMFController.createPhysicalUcc);
+router.post("/createDematUcc", requireInvestor, StarMFController.createDematUcc);
+router.post("/createBothUcc", requireInvestor, StarMFController.createBothUcc);
+router.post("/updateUccAddress", requireInvestor, StarMFController.updateUccAddress);
+router.post("/updateUccProfile", requireInvestor, StarMFController.updateUccProfile);
+router.post("/updateUccUpdateBankData", requireInvestor, StarMFController.updateUccUpdateBankData);
+router.post("/deactivateUcc", requireInvestor, StarMFController.deactivateUcc);
 
 // SIP / XSP
-router.post("/xspRegister", StarMFController.xspRegister);
-router.post("/getXsp", StarMFController.getXsp);
-router.post("/pauseXsp", StarMFController.pauseXsp);
-router.post("/cancelXsp", StarMFController.cancelXsp);
-router.post("/getAllXsp", StarMFController.getAllXsp);
-router.post("/topupXsp", StarMFController.topupXsp);
-router.post("/resumeXsp", StarMFController.resumeXsp);
-router.post("/getXspTrxnHistory", StarMFController.getXspTrxnHistory);
+router.post("/xspRegister", ...auth, StarMFController.xspRegister);
+router.post("/getXsp", ...auth, StarMFController.getXsp);
+router.post("/pauseXsp", ...auth, StarMFController.pauseXsp);
+router.post("/cancelXsp", ...auth, StarMFController.cancelXsp);
+router.post("/getAllXsp", ...auth, StarMFController.getAllXsp);
+router.post("/topupXsp", ...auth, StarMFController.topupXsp);
+router.post("/resumeXsp", ...auth, StarMFController.resumeXsp);
+router.post("/getXspTrxnHistory", ...auth, StarMFController.getXspTrxnHistory);
 
 // Orders
-router.post("/purchaseNewOrder", StarMFController.purchaseNewOrder);
-router.post("/updatePurchaseOrder", StarMFController.updatePurchaseOrder);
-router.post("/getAllOrders", StarMFController.getAllOrders);
-router.post("/getOrder", StarMFController.getOrder);
-router.post("/getClientPortfolio", StarMFController.getClientPortfolio);
-router.post("/cancelPurchaseOrder", StarMFController.cancelPurchaseOrder);
+router.post("/purchaseNewOrder", ...auth, StarMFController.purchaseNewOrder);
+router.post("/updatePurchaseOrder", ...auth, StarMFController.updatePurchaseOrder);
+router.post("/getAllOrders", ...auth, StarMFController.getAllOrders);
+router.post("/getOrder", ...auth, StarMFController.getOrder);
+router.post("/getClientPortfolio", ...auth, StarMFController.getClientPortfolio);
+router.post("/cancelPurchaseOrder", ...auth, StarMFController.cancelPurchaseOrder);
 
 // Payments
-router.post("/listPaymentDetail", StarMFController.listPaymentDetail);
-router.post("/getPaymentDetail", StarMFController.getPaymentDetail);
-router.post("/get-payment-link", StarMFController.getPaymentLink);
+router.post("/listPaymentDetail", ...auth, StarMFController.listPaymentDetail);
+router.post("/getPaymentDetail", ...auth, StarMFController.getPaymentDetail);
+router.post("/get-payment-link", ...auth, StarMFController.getPaymentLink);
 router.post("/payment/callback", StarMFController.paymentCallback);
-router.post("/getExchPgService", StarMFController.getExchPgService);
-router.post("/sendPaymentInfo", StarMFController.sendPaymentInfo);
+router.post("/getExchPgService", ...auth, StarMFController.getExchPgService);
+router.post("/sendPaymentInfo", ...auth, StarMFController.sendPaymentInfo);
 
 // MIS
 router.post("/uploadMis", StarMFController.uploadMis);
@@ -66,17 +65,17 @@ router.post("/get2FAVerifySxpReg", StarMFController.get2FAVerifySxpReg);
 router.post("/get2FAVerifyOrderCancel", StarMFController.get2FAVerifyOrderCancel);
 
 // Mandates
-router.post("/registerMandate", StarMFController.registerMandate);
-router.post("/registerMandateUPI", StarMFController.registerMandateUPI);
-router.post("/registerMandateEnach", StarMFController.registerMandateEnach);
-router.post("/registerMandateNach", StarMFController.registerMandateNach);
-router.post("/getMandate", StarMFController.getMandate);
-router.post("/getAllMandate", StarMFController.getAllMandate);
-router.post("/cancelMandate", StarMFController.cancelMandate);
-router.post("/linkMandate", StarMFController.linkMandate);
-router.post("/mandateDelink", StarMFController.mandateDelink);
-router.post("/updateMandate", StarMFController.updateMandate);
-router.post("/mandate_register/upi-autopay", StarMFController.mandateRegisterUpiAutoPay);
+router.post("/registerMandate", ...auth, StarMFController.registerMandate);
+router.post("/registerMandateUPI", ...auth, StarMFController.registerMandateUPI);
+router.post("/registerMandateEnach", ...auth, StarMFController.registerMandateEnach);
+router.post("/registerMandateNach", ...auth, StarMFController.registerMandateNach);
+router.post("/getMandate", ...auth, StarMFController.getMandate);
+router.post("/getAllMandate", ...auth, StarMFController.getAllMandate);
+router.post("/cancelMandate", ...auth, StarMFController.cancelMandate);
+router.post("/linkMandate", ...auth, StarMFController.linkMandate);
+router.post("/mandateDelink", ...auth, StarMFController.mandateDelink);
+router.post("/updateMandate", ...auth, StarMFController.updateMandate);
+router.post("/mandate_register/upi-autopay", ...auth, StarMFController.mandateRegisterUpiAutoPay);
 
 router.get("/test-api", StarMFController.testAPI);
 
