@@ -732,7 +732,9 @@ class StarMFController {
           throw error;
         }
       }
-      if (!schemesRes?.data?.lists) return res.json(schemesRes);
+      if (!schemesRes?.data?.lists) {
+        return res.status(502).json(schemesRes || { status: "error", message: "BSE scheme list unavailable" });
+      }
 
       let schemes = (schemesRes.data.lists || []).filter(isTransactable);
       if (filterCode) {
