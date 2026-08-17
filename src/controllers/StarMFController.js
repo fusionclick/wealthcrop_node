@@ -1,5 +1,6 @@
 const { configData } = require("../config");
 const axios = require("axios");
+const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
 const { isTransactable, mapScheme, parseListQuery, matchesCategory } = require("../mf/scheme");
 const { bindUcc, validateOrder, checkSchemeLimits, normalizeOrder, investorUcc } = require("../mf/order");
@@ -58,7 +59,23 @@ class StarMFController {
     this.tokenExpiry = "";
     // ponytail: follow BSE_BASE_URL (demo|prod) — was hardcoded demo while .env used prod
     this.bseDemoUrl = `${String(configData.baseUrl).replace(/\/$/, "")}/api`;
-    this.bseToken = '';
+    this.bseToken = "";
+    this.insecureAgent = new https.Agent({ rejectUnauthorized: false });
+    if (String(this.baseUrl).includes("starmfv2demo")) {
+      [
+        this.loginService,
+        this.uccService,
+        this.trxnService,
+        this.mandatteService,
+        this.paymentService,
+        this.masterDataService,
+        this.nftService,
+        this.fetch2FALinkService,
+        this.navService,
+      ].forEach((svc) => {
+        if (svc?.api?._axios?.defaults) svc.api._axios.defaults.httpsAgent = this.insecureAgent;
+      });
+    }
   }
 
   // Direct Axios BSE Login
@@ -315,10 +332,8 @@ class StarMFController {
       this.username,
       this.password
     );
-    let accessToken = loginResp?.data?.access_token;
-    this.accessToken = accessToken;
-    // return accessToken ? accessToken : null;
-    return loginResp;
+    this.accessToken = loginResp?.data?.access_token;
+    return loginResp || { status: "error", message: "empty login response" };
   }
 
   async executeWithRetry(serviceInstance, serviceMethod, reqObj, res) {
