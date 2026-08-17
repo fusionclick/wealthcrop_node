@@ -1,14 +1,6 @@
-const axios = require('axios');
-const StarMFService = require("bse-starmfv2-sdk");
-// const {
-//   BseLoginService,
-//   UccService,
-//   TrxnService,
-//   MandateService,
-//   PaymentService,
-//   MasterDataService,
-// } = require("../../../src");
 const { configData } = require("../config");
+const axios = require("axios");
+const StarMFService = require("bse-starmfv2-sdk");
 const { isTransactable, mapScheme, parseListQuery, matchesCategory } = require("../mf/scheme");
 const { bindUcc, validateOrder, checkSchemeLimits, normalizeOrder, investorUcc } = require("../mf/order");
 const orderRequestData = require("../requestData/orderRequestData");
@@ -716,7 +708,10 @@ class StarMFController {
     };
 
     try {
-      await this.loginFunc();
+      const loginResp = await this.loginFunc();
+      if (loginResp?.status === "error" || !this.accessToken) {
+        return res.status(502).json({ status: "error", message: "BSE login failed" });
+      }
       let schemesRes;
       try {
         schemesRes = await this.masterDataService.getSchemeMasterList(this.accessToken, reqObj);
