@@ -1,19 +1,13 @@
-require("dotenv").config();
-if (
-  String(process.env.BSE_BASE_URL || "https://starmfv2demo.bseindia.com").includes("starmfv2demo") ||
-  process.env.BSE_TLS_INSECURE === "1"
-) {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-}
-
-const dns = require("dns");
-if (typeof dns.setDefaultResultOrder === "function") {
-  dns.setDefaultResultOrder("ipv4first");
-}
+require("./config");
 
 const express = require("express");
 const cors = require("cors");
+const dns = require("dns");
 const rootRoute = require("./route/root-route/rootRoute");
+
+if (typeof dns.setDefaultResultOrder === "function") {
+  dns.setDefaultResultOrder("ipv4first");
+}
 
 const app = express();
 
