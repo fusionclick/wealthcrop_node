@@ -60,7 +60,7 @@ class StarMFController {
     // ponytail: follow BSE_BASE_URL (demo|prod) — was hardcoded demo while .env used prod
     this.bseDemoUrl = `${String(configData.baseUrl).replace(/\/$/, "")}/api`;
     this.bseToken = "";
-    this.insecureAgent = new https.Agent({ rejectUnauthorized: false, family: 4 });
+    this.insecureAgent = new https.Agent({ rejectUnauthorized: false });
     [
       this.loginService,
       this.uccService,
@@ -360,9 +360,8 @@ class StarMFController {
     } catch (error) {
       const message =
         error.response?.data?.message ||
-        error.response?.data?.status ||
-        error.code ||
         error.message ||
+        error.code ||
         "BSE login failed";
       console.error("BSE login failed:", message);
       return { status: "error", message: String(message), detail: error.response?.data || null };

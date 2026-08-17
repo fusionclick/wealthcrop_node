@@ -6,6 +6,11 @@ if (
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 }
 
+const dns = require("dns");
+if (typeof dns.setDefaultResultOrder === "function") {
+  dns.setDefaultResultOrder("ipv4first");
+}
+
 const express = require("express");
 const cors = require("cors");
 const rootRoute = require("./route/root-route/rootRoute");
