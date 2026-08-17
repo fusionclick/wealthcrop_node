@@ -1,14 +1,16 @@
-const express = require("express");
-const cors = require("cors");
-const dotenv = require("dotenv");
-const rootRoute = require("./route/root-route/rootRoute");
-
-dotenv.config();
-
-const app = express();
-if (String(process.env.BSE_BASE_URL || "https://starmfv2demo.bseindia.com").includes("starmfv2demo") || process.env.BSE_TLS_INSECURE === "1") {
+require("dotenv").config();
+if (
+  String(process.env.BSE_BASE_URL || "https://starmfv2demo.bseindia.com").includes("starmfv2demo") ||
+  process.env.BSE_TLS_INSECURE === "1"
+) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 }
+
+const express = require("express");
+const cors = require("cors");
+const rootRoute = require("./route/root-route/rootRoute");
+
+const app = express();
 
 // ponytail: open CORS; tighten origins if you turn credentials on
 app.use(cors());

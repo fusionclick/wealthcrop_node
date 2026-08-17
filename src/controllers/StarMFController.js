@@ -60,22 +60,26 @@ class StarMFController {
     // ponytail: follow BSE_BASE_URL (demo|prod) — was hardcoded demo while .env used prod
     this.bseDemoUrl = `${String(configData.baseUrl).replace(/\/$/, "")}/api`;
     this.bseToken = "";
-    this.insecureAgent = new https.Agent({ rejectUnauthorized: false });
-    if (String(this.baseUrl).includes("starmfv2demo")) {
-      [
-        this.loginService,
-        this.uccService,
-        this.trxnService,
-        this.mandatteService,
-        this.paymentService,
-        this.masterDataService,
-        this.nftService,
-        this.fetch2FALinkService,
-        this.navService,
-      ].forEach((svc) => {
-        if (svc?.api?._axios?.defaults) svc.api._axios.defaults.httpsAgent = this.insecureAgent;
+    this.insecureAgent = new https.Agent({ rejectUnauthorized: false, family: 4 });
+    [
+      this.loginService,
+      this.uccService,
+      this.trxnService,
+      this.mandatteService,
+      this.paymentService,
+      this.masterDataService,
+      this.nftService,
+      this.fetch2FALinkService,
+      this.navService,
+    ].forEach((svc) => {
+      const ax = svc?.api?._axios;
+      if (!ax) return;
+      ax.defaults.httpsAgent = this.insecureAgent;
+      ax.interceptors.request.use((config) => {
+        config.httpsAgent = this.insecureAgent;
+        return config;
       });
-    }
+    });
   }
 
   // Direct Axios BSE Login
@@ -328,19 +332,48 @@ class StarMFController {
   };
 
   async loginFunc() {
-    const loginResp = await this.loginService.login(
-      this.username,
-      this.password
-    );
-    this.accessToken = loginResp?.data?.access_token;
-    return loginResp || { status: "error", message: "empty login response" };
+    if (!this.username || !this.password) {
+      return { status: "error", message: "BSE credentials not configured" };
+    }
+    try {
+      const response = await axios.post(
+        `${this.bseDemoUrl}/login`,
+        { data: { username: this.username, password: this.password } },
+        { httpsAgent: this.insecureAgent, timeout: 30000 }
+      );
+      const data = response.data || {};
+      this.accessToken =
+        data?.data?.access_token ||
+        data?.data?.accessToken ||
+        data?.access_token ||
+        data?.accessToken ||
+        data?.token ||
+        null;
+      if (!this.accessToken) {
+        return {
+          status: "error",
+          message: data?.message || "BSE login returned no token",
+          detail: data,
+        };
+      }
+      return data.status ? data : { status: "success", data: { access_token: this.accessToken } };
+    } catch (error) {
+      const message =
+        error.response?.data?.message ||
+        error.response?.data?.status ||
+        error.code ||
+        error.message ||
+        "BSE login failed";
+      console.error("BSE login failed:", message);
+      return { status: "error", message: String(message), detail: error.response?.data || null };
+    }
   }
 
   async executeWithRetry(serviceInstance, serviceMethod, reqObj, res) {
     let loginResp;
     loginResp = await this.loginFunc();
     if (loginResp?.status === "error") {
-      return res.json(loginResp);
+      return res.status(502).json(loginResp);
     }
     
     const requestData = reqObj;
@@ -362,7 +395,7 @@ class StarMFController {
         this.accessToken = null;
         loginResp = await this.loginFunc();
         if (loginResp?.status === "error") {
-          return res.json(loginResp);
+          return res.status(502).json(loginResp);
         }
         try {
           console.log(`[Token Expired] Retrying ${serviceMethod} with new token...`);
