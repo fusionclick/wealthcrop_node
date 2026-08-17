@@ -710,7 +710,11 @@ class StarMFController {
     try {
       const loginResp = await this.loginFunc();
       if (loginResp?.status === "error" || !this.accessToken) {
-        return res.status(502).json({ status: "error", message: "BSE login failed" });
+        return res.status(502).json({
+          status: "error",
+          message: "BSE login failed",
+          detail: loginResp?.message || loginResp?.status || null,
+        });
       }
       let schemesRes;
       try {
