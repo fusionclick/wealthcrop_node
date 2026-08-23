@@ -2,7 +2,7 @@ const { configData } = require("../config");
 const axios = require("axios");
 const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
-const { isTransactable, mapScheme, parseListQuery, matchesCategory, categorySearch } = require("../mf/scheme");
+const { isTransactable, mapScheme, parseListQuery, matchesCategory, categorySearch, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
 const { bindUcc, validateOrder, checkSchemeLimits, normalizeOrder, investorUcc } = require("../mf/order");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
@@ -741,12 +741,15 @@ class StarMFController {
 
   getSchemeMasterList = async (req, res) => {
     const q = parseListQuery(req.body || {});
+    const cacheKey = listCacheKey(q);
+    const cached = getListCache(cacheKey);
+    if (cached) return res.json(cached);
     const special = ["gold_funds", "large_cap", "mid_cap", "small_cap"].includes(q.category);
     const filterCode = q.scheme_code || q.isin;
     const reqObj = {
       data: {
         start: special || filterCode ? 0 : q.start,
-        length: special ? 500 : filterCode ? 50 : q.length,
+        length: special ? 50 : filterCode ? 50 : q.length,
         fields: ["ALL"],
         count_only: false,
         filter_param: {},
@@ -797,7 +800,7 @@ class StarMFController {
       if (special) finalLists = finalLists.slice(q.start, q.start + q.length);
 
       const total = Number(schemesRes.data.count || finalLists.length);
-      res.json({
+      const payload = {
         status: "success",
         data: {
           count: special || filterCode ? finalLists.length : total,
@@ -806,7 +809,9 @@ class StarMFController {
           length: q.length,
           lists: finalLists,
         },
-      });
+      };
+      setListCache(cacheKey, payload);
+      res.json(payload);
     } catch (error) {
       res.status(500).json({ error: "Internal Server Error", details: error.message });
     }

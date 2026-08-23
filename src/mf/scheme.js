@@ -97,6 +97,26 @@ function paginate(list, start, length) {
   return list.slice(start, start + length);
 }
 
+const LIST_TTL_MS = 5 * 60 * 1000;
+const listCache = new Map();
+
+function listCacheKey(q = {}) {
+  return [q.category, q.search, q.start, q.length, q.isin, q.scheme_code].join("|");
+}
+
+function getListCache(key) {
+  const row = listCache.get(key);
+  if (!row || Date.now() > row.exp) {
+    listCache.delete(key);
+    return null;
+  }
+  return row.data;
+}
+
+function setListCache(key, data) {
+  listCache.set(key, { data, exp: Date.now() + LIST_TTL_MS });
+}
+
 module.exports = {
   flag,
   isTransactable,
@@ -108,5 +128,8 @@ module.exports = {
   matchesCategory,
   categorySearch,
   paginate,
+  listCacheKey,
+  getListCache,
+  setListCache,
   paginate: paginate,
 };

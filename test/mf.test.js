@@ -1,7 +1,7 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const { resolveBseBaseUrl } = require("../src/config");
-const { isTransactable, mapScheme, parseListQuery, matchesCategory, categorySearch, paginate } = require("../src/mf/scheme");
+const { isTransactable, mapScheme, parseListQuery, matchesCategory, categorySearch, paginate, listCacheKey, getListCache, setListCache } = require("../src/mf/scheme");
 const { uccMatches, validateOrder, checkSchemeLimits, normalizeOrder, bindUcc } = require("../src/mf/order");
 
 describe("catalogue", () => {
@@ -37,6 +37,9 @@ describe("catalogue", () => {
     assert.equal(matchesCategory({ name: "SBI ESG Exclusionary", subType: "Equity" }, "gold_funds"), false);
     assert.equal(categorySearch("gold_funds"), "GOLD");
     assert.equal(categorySearch("large_cap"), "LARGE CAP");
+    const key = listCacheKey({ category: "mid_cap", search: "MID CAP", start: 0, length: 20 });
+    setListCache(key, { ok: 1 });
+    assert.equal(getListCache(key).ok, 1);
   });
 
   it("falls back from unresolved prod host to demo", () => {
