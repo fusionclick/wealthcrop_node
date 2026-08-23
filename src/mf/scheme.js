@@ -75,6 +75,8 @@ function categorySearch(category) {
       large_cap: "LARGE CAP",
       mid_cap: "MID CAP",
       small_cap: "SMALL CAP",
+      high_return: "FLEXI CAP",
+      "5_star_funds": "BLUECHIP",
     }[category] || ""
   );
 }
