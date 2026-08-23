@@ -2,7 +2,7 @@ const { configData } = require("../config");
 const axios = require("axios");
 const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
-const { isTransactable, mapScheme, parseListQuery, matchesCategory } = require("../mf/scheme");
+const { isTransactable, mapScheme, parseListQuery, matchesCategory, categorySearch } = require("../mf/scheme");
 const { bindUcc, validateOrder, checkSchemeLimits, normalizeOrder, investorUcc } = require("../mf/order");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
@@ -750,7 +750,7 @@ class StarMFController {
         fields: ["ALL"],
         count_only: false,
         filter_param: {},
-        search: { value: filterCode || q.search || "" },
+        search: { value: filterCode || q.search || categorySearch(q.category) || "" },
       },
     };
 

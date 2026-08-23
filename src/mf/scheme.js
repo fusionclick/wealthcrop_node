@@ -33,9 +33,12 @@ function mapScheme(scheme = {}, index = 0) {
     category: category || "Mutual Fund",
     subType: [category, sub].filter(Boolean).join(" • ") || "Mutual Fund",
     scheme_isin: isin,
+    scheme_isin: isin,
+    scheme_bse_code: bseCode,
     scheme_bse_code: bseCode,
     nav: nav != null && nav !== "" ? Number(nav) : null,
     minSip: minSip != null && minSip !== "" ? Number(minSip) : null,
+    minLumpsum: minLumpsum != null && minLumpsum !== "" ? Number(minLumpsum) : null,
     minLumpsum: minLumpsum != null && minLumpsum !== "" ? Number(minLumpsum) : null,
     minRedeem: minRedeem != null && minRedeem !== "" ? Number(minRedeem) : null,
     purchase_allowed: scheme.purchase_allowed ?? scheme.purchase_allow ?? null,
@@ -45,6 +48,7 @@ function mapScheme(scheme = {}, index = 0) {
     scheme_option: scheme.scheme_option || null,
     scheme_amc_name: scheme.scheme_amc_name || scheme.amc_name || null,
     logoText: name ? name.charAt(0).toUpperCase() : "F",
+    returns: { "1Y": null, "3Y": null, "5Y": null },
     returns: { "1Y": null, "3Y": null, "5Y": null },
   };
 }
@@ -64,14 +68,25 @@ function parseListQuery(body = {}) {
   return { start, length, search, category, isin, scheme_code };
 }
 
+function categorySearch(category) {
+  return (
+    {
+      gold_funds: "GOLD",
+      large_cap: "LARGE CAP",
+      mid_cap: "MID CAP",
+      small_cap: "SMALL CAP",
+    }[category] || ""
+  );
+}
+
 function matchesCategory(item, category) {
   if (!category) return true;
   const hay = `${item.subType || ""} ${item.name || ""} ${item.category || ""}`.toLowerCase();
   if (category === "large_cap") return hay.includes("large cap") || hay.includes("large & mid");
-  if (category === "mid_cap") return hay.includes("mid cap") || hay.includes("large & mid");
+  if (category === "mid_cap") return /\bmid cap\b/.test(hay) || hay.includes("large & mid");
   if (category === "small_cap") return hay.includes("small cap");
   if (category === "gold_funds") {
-    return hay.includes("gold") || hay.includes("silver") || hay.includes("commodity") || hay.includes("precious metal");
+    return /\bgold\b/.test(hay) || /\bsilver\b/.test(hay) || hay.includes("precious metal");
   }
   return true;
 }
@@ -80,4 +95,16 @@ function paginate(list, start, length) {
   return list.slice(start, start + length);
 }
 
-module.exports = { flag, isTransactable, mapScheme, parseListQuery, matchesCategory, paginate };
+module.exports = {
+  flag,
+  isTransactable,
+  isTransactable: isTransactable,
+  mapScheme,
+  mapScheme: mapScheme,
+  parseListQuery,
+  parseListQuery: parseListQuery,
+  matchesCategory,
+  categorySearch,
+  paginate,
+  paginate: paginate,
+};

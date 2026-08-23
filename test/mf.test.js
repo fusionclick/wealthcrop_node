@@ -1,7 +1,7 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const { resolveBseBaseUrl } = require("../src/config");
-const { isTransactable, mapScheme, parseListQuery, matchesCategory, paginate } = require("../src/mf/scheme");
+const { isTransactable, mapScheme, parseListQuery, matchesCategory, categorySearch, paginate } = require("../src/mf/scheme");
 const { uccMatches, validateOrder, checkSchemeLimits, normalizeOrder, bindUcc } = require("../src/mf/order");
 
 describe("catalogue", () => {
@@ -34,6 +34,9 @@ describe("catalogue", () => {
     assert.deepEqual(paginate([1, 2, 3, 4, 5], 2, 2), [3, 4]);
     assert.equal(matchesCategory({ name: "HDFC Large Cap", subType: "Equity • Large Cap" }, "large_cap"), true);
     assert.equal(matchesCategory({ name: "Nippon Gold", subType: "Commodity" }, "gold_funds"), true);
+    assert.equal(matchesCategory({ name: "SBI ESG Exclusionary", subType: "Equity" }, "gold_funds"), false);
+    assert.equal(categorySearch("gold_funds"), "GOLD");
+    assert.equal(categorySearch("large_cap"), "LARGE CAP");
   });
 
   it("falls back from unresolved prod host to demo", () => {
