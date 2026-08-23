@@ -1,9 +1,12 @@
 require("./config");
 
+const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const dns = require("dns");
 const rootRoute = require("./route/root-route/rootRoute");
+const StarMFController = require("./controllers/StarMFController");
+const { attachNavSocket } = require("./mf/navSocket");
 
 if (typeof dns.setDefaultResultOrder === "function") {
   dns.setDefaultResultOrder("ipv4first");
@@ -40,4 +43,6 @@ app.get("/", (req, res) => res.redirect("/health"));
 app.use("/api", rootRoute);
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`WealthCrop BSE proxy listening on port ${port}`));
+const server = http.createServer(app);
+attachNavSocket(server, StarMFController);
+server.listen(port, () => console.log(`WealthCrop BSE proxy listening on port ${port}`));

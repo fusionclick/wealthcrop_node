@@ -40,6 +40,10 @@ describe("catalogue", () => {
     const key = listCacheKey({ category: "mid_cap", search: "MID CAP", start: 0, length: 20 });
     setListCache(key, { ok: 1 });
     assert.equal(getListCache(key).ok, 1);
+    const { mapNavRows } = require("../src/mf/navSocket");
+    const navs = mapNavRows([{ isin: "inf1", bse_scheme_code: "007G", nav: "12.5" }]);
+    assert.equal(navs.INF1, 12.5);
+    assert.equal(navs["007G"], 12.5);
   });
 
   it("falls back from unresolved prod host to demo", () => {
