@@ -3,7 +3,7 @@ const axios = require("axios");
 const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
 const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, matchesCategory, categorySearch, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
-const { loadFundNav, categoryStats, searchQuery } = require("../mf/mfapi");
+const { loadFundNav } = require("../mf/mfapi");
 const { bindUcc, validateOrder, checkSchemeLimits, normalizeOrder, investorUcc } = require("../mf/order");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
@@ -877,15 +877,9 @@ class StarMFController {
 
       const profile = fundProfile(mapped.name, `${mapped.category} ${mf?.meta?.scheme_category || ""}`);
       const ratios = ratiosFromSeries(mf?.series || [], profile.holdings);
-      let categoryAvg = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
-      let rank = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
-      try {
-        const stats = await categoryStats(searchQuery(mapped.name, isin), mf?.code, returns);
-        categoryAvg = stats.categoryAvg;
-        rank = stats.rank;
-      } catch (e) {
-        console.error("peer stats failed", e.message);
-      }
+      // ponytail: skip peer NAV fan-out — nginx times out scheme-details
+      const categoryAvg = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
+      const rank = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
 
       return res.json({
         status: "success",

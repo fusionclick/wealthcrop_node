@@ -48,7 +48,7 @@ async function resolveScheme(isin, name) {
   const needle = String(isin || "").trim().toUpperCase();
   const q = searchQuery(name, isin);
   const hits = await searchSchemes(q);
-  for (const h of hits.slice(0, 12)) {
+  for (const h of hits.slice(0, 2)) {
     const latest = await getLatest(h.schemeCode);
     const meta = latest.meta || {};
     const isins = [meta.isin_growth, meta.isin_div_reinvestment].map((x) => String(x || "").toUpperCase());
