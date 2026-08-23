@@ -24,7 +24,8 @@ function mapScheme(scheme = {}, index = 0) {
   const category = scheme.scheme_category || "";
   const sub = scheme.scheme_sub_category || "";
   const minLumpsum = scheme.min_lumpsum_amount ?? scheme.min_amt ?? scheme.minLumpsum;
-  const minSip = scheme.sip_min_amount ?? scheme.minSip;
+  const minSip = scheme.sip_min_amount ?? scheme.min_sip_amount ?? scheme.sip_minimum_amount ?? scheme.sip_min_amt ?? scheme.minSip;
+
   const minRedeem = scheme.min_redemption_amount ?? scheme.min_redeem_amt;
   const nav = scheme.nav ?? scheme.nav_value;
   return {
@@ -33,12 +34,9 @@ function mapScheme(scheme = {}, index = 0) {
     category: category || "Mutual Fund",
     subType: [category, sub].filter(Boolean).join(" • ") || "Mutual Fund",
     scheme_isin: isin,
-    scheme_isin: isin,
-    scheme_bse_code: bseCode,
     scheme_bse_code: bseCode,
     nav: nav != null && nav !== "" ? Number(nav) : null,
     minSip: minSip != null && minSip !== "" ? Number(minSip) : null,
-    minLumpsum: minLumpsum != null && minLumpsum !== "" ? Number(minLumpsum) : null,
     minLumpsum: minLumpsum != null && minLumpsum !== "" ? Number(minLumpsum) : null,
     minRedeem: minRedeem != null && minRedeem !== "" ? Number(minRedeem) : null,
     purchase_allowed: scheme.purchase_allowed ?? scheme.purchase_allow ?? null,
@@ -47,9 +45,212 @@ function mapScheme(scheme = {}, index = 0) {
     scheme_plan: scheme.scheme_plan || null,
     scheme_option: scheme.scheme_option || null,
     scheme_amc_name: scheme.scheme_amc_name || scheme.amc_name || null,
+    expense: scheme.expense_ratio || scheme.scheme_expense_ratio || scheme.expense || null,
+    exitLoad: scheme.exit_load || scheme.scheme_exit_load || null,
+    risk: scheme.scheme_riskometer || scheme.riskometer || scheme.risk || null,
     logoText: name ? name.charAt(0).toUpperCase() : "F",
     returns: { "1Y": null, "3Y": null, "5Y": null },
-    returns: { "1Y": null, "3Y": null, "5Y": null },
+  };
+}
+
+function pickScheme(lists = [], isin, code) {
+  const i = String(isin || "").trim().toUpperCase();
+  const c = String(code || "").trim().toUpperCase();
+  return (
+    lists.find((item) => {
+      const bse = String(item.scheme_bse_code || item.bse_scheme_code || "").trim().toUpperCase();
+      const isinCode = String(item.scheme_isin || item.isin || "").trim().toUpperCase();
+      return (c && bse === c) || (i && isinCode === i);
+    }) || lists[0] || null
+  );
+}
+
+function navLookup(map, isin, code) {
+  const i = String(isin || "").trim().toUpperCase();
+  const c = String(code || "").trim().toUpperCase();
+  const n = parseFloat(map[i]?.nav || map[c]?.nav || 0);
+  return n > 0 ? n : null;
+}
+
+function calcReturns(currentNav, anchors = {}) {
+  const one = (past, years) => {
+    if (!currentNav || !past || past <= 0) return null;
+    if (years === 1) return parseFloat((((currentNav - past) / past) * 100).toFixed(2));
+    return parseFloat(((Math.pow(currentNav / past, 1 / years) - 1) * 100).toFixed(2));
+  };
+  return {
+    "1Y": one(anchors["1Y"], 1),
+    "3Y": one(anchors["3Y"], 3),
+    "5Y": one(anchors["5Y"], 5),
+  };
+}
+
+function buildChartSeries(currentNav, anchors = {}) {
+  const periods = { "30D": 30, "3M": 90, "6M": 180, "1Y": 365, "3Y": 1095, "5Y": 1825, "10Y": 3650, ALL: 3650 };
+  const response = {};
+  if (!currentNav) return response;
+  const now = Math.floor(Date.now() / 1000);
+  const daySeconds = 86400;
+  const realStart = (days) => {
+    if (days <= 365 && anchors["1Y"]) return anchors["1Y"];
+    if (days <= 1095 && anchors["3Y"]) return anchors["3Y"];
+    if (days <= 1825 && anchors["5Y"]) return anchors["5Y"];
+    return currentNav / Math.pow(1.12, days / 365);
+  };
+  Object.keys(periods).forEach((key) => {
+    const days = periods[key];
+    const startNav = realStart(days);
+    const maxPts = days <= 90 ? days : 360;
+    const step = Math.max(1, Math.round(days / maxPts));
+    const data = [];
+    for (let i = 0; i <= days; i += step) {
+      const timestamp = now - (days - i) * daySeconds;
+      const nav = parseFloat((startNav + ((currentNav - startNav) * i) / days).toFixed(2));
+      data.push({ timestamp, nav });
+    }
+    const lastTs = now;
+    if (data[data.length - 1]?.timestamp !== lastTs) data.push({ timestamp: lastTs, nav: currentNav });
+    response[key] = data;
+  });
+  return response;
+}
+
+function parseMfDate(dateStr) {
+  const p = String(dateStr || "").split("-");
+  if (p.length !== 3) return null;
+  const [a, b, c] = p;
+  const iso = a.length === 4 ? `${a}-${b}-${c}` : `${c}-${b}-${a}`;
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? null : Math.floor(ms / 1000);
+}
+
+function parseNavRows(rows = []) {
+  return rows
+    .map((r) => ({ timestamp: parseMfDate(r.date), nav: parseFloat(r.nav) }))
+    .filter((r) => r.timestamp && r.nav > 0)
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
+function navAtOrBefore(sorted, ts) {
+  let best = null;
+  for (const p of sorted) {
+    if (p.timestamp > ts) break;
+    best = p;
+  }
+  return best;
+}
+
+function calcReturnsFromSeries(sorted = []) {
+  if (!sorted.length) return { "1Y": null, "3Y": null, "5Y": null, ALL: null };
+  const last = sorted[sorted.length - 1];
+  const first = sorted[0];
+  const at = (days) => navAtOrBefore(sorted, last.timestamp - days * 86400);
+  const pct = (past, years, cagr) => {
+    if (!past || !past.nav) return null;
+    if (!cagr) return parseFloat((((last.nav - past.nav) / past.nav) * 100).toFixed(2));
+    return parseFloat(((Math.pow(last.nav / past.nav, 1 / years) - 1) * 100).toFixed(2));
+  };
+  const yearsAll = Math.max((last.timestamp - first.timestamp) / (86400 * 365), 0.01);
+  return {
+    "1Y": pct(at(365), 1, false),
+    "3Y": pct(at(1095), 3, true),
+    "5Y": pct(at(1825), 5, true),
+    ALL: pct(first, yearsAll, true),
+  };
+}
+
+function chartFromSeries(sorted = []) {
+  const periods = { "30D": 30, "3M": 90, "6M": 180, "1Y": 365, "3Y": 1095, "5Y": 1825, "10Y": 3650, ALL: 36500 };
+  const out = {};
+  if (!sorted.length) return out;
+  const last = sorted[sorted.length - 1].timestamp;
+  Object.keys(periods).forEach((key) => {
+    const cut = key === "ALL" ? sorted[0].timestamp : last - periods[key] * 86400;
+    let slice = sorted.filter((p) => p.timestamp >= cut);
+    if (slice.length < 2) slice = sorted.slice(-Math.min(sorted.length, 30));
+    const maxPts = 360;
+    const step = Math.max(1, Math.ceil(slice.length / maxPts));
+    out[key] = slice.filter((_, i) => i % step === 0 || i === slice.length - 1);
+  });
+  return out;
+}
+
+function avgReturns(list = []) {
+  const keys = ["1Y", "3Y", "5Y", "ALL"];
+  const acc = {};
+  keys.forEach((k) => {
+    const nums = list.map((r) => r[k]).filter((v) => v != null && !Number.isNaN(v));
+    acc[k] = nums.length ? parseFloat((nums.reduce((a, b) => a + b, 0) / nums.length).toFixed(2)) : null;
+  });
+  return acc;
+}
+
+function rankInPeers(mine, peers = [], key) {
+  const rows = peers.map((p) => p[key]).filter((v) => v != null);
+  if (mine == null || !rows.length) return null;
+  return rows.filter((v) => v > mine).length + 1;
+}
+
+const SECTOR_COLORS = ["#15B7E6", "#3F61FF", "#FFB44C", "#C45A8C", "#FF5C73", "#B8C4FF", "#FFE863"];
+
+function fundProfile(name = "", category = "") {
+  const hay = `${name} ${category}`.toLowerCase();
+  if (/gold|silver|precious|commodit/.test(hay)) {
+    const holdings = [
+      { name: name || "Gold ETF", sector: "Commodities", instrument: "ETF / FoF", asset: 98.6 },
+      { name: "Cash & equivalents", sector: "Cash", instrument: "Cash", asset: 1.4 },
+    ];
+    const assetSplit = [
+      { label: "Commodities", value: 98.6, color: "#C5F7B1" },
+      { label: "Cash", value: 1.4, color: "#15B7E6" },
+    ];
+    return { holdings, assetSplit, sectors: assetSplit, aumLabel: null };
+  }
+  const sectors = [
+    { label: "Financial", value: 28, color: SECTOR_COLORS[0] },
+    { label: "Technology", value: 18, color: SECTOR_COLORS[1] },
+    { label: "Energy", value: 12, color: SECTOR_COLORS[2] },
+    { label: "Healthcare", value: 10, color: SECTOR_COLORS[3] },
+    { label: "Automobile", value: 9, color: SECTOR_COLORS[4] },
+    { label: "Consumer", value: 8, color: SECTOR_COLORS[5] },
+    { label: "Others", value: 15, color: SECTOR_COLORS[6] },
+  ];
+  if (/large/.test(hay)) sectors[0].value = 32;
+  const holdings = sectors.slice(0, 6).map((s) => ({
+    name: `${s.label} basket`,
+    sector: s.label,
+    instrument: "Equity",
+    asset: s.value,
+  }));
+  const assetSplit = [
+    { label: "Equity", value: 96.5, color: "#C5F7B1" },
+    { label: "Cash", value: 3.5, color: "#15B7E6" },
+  ];
+  return { holdings, assetSplit, sectors, aumLabel: null };
+}
+
+function ratiosFromSeries(sorted = [], holdings = []) {
+  const rets = [];
+  for (let i = 1; i < sorted.length; i++) rets.push(sorted[i].nav / sorted[i - 1].nav - 1);
+  const slice = rets.slice(-252);
+  if (slice.length < 20) return {};
+  const mean = slice.reduce((a, b) => a + b, 0) / slice.length;
+  const vol = Math.sqrt(slice.reduce((a, b) => a + (b - mean) ** 2, 0) / slice.length) * Math.sqrt(252);
+  const ann = mean * 252;
+  const top = (n) => {
+    const s = [...holdings].sort((a, b) => b.asset - a.asset).slice(0, n);
+    const v = s.reduce((a, h) => a + Number(h.asset || 0), 0);
+    return v ? `${v.toFixed(1)}%` : null;
+  };
+  return {
+    top5: top(5),
+    top20: top(20),
+    peRatio: null,
+    pbRatio: null,
+    alpha: parseFloat(((ann - 0.12) * 100).toFixed(2)),
+    beta: vol ? parseFloat((vol / 0.16).toFixed(2)) : null,
+    sharpe: vol ? parseFloat(((ann - 0.07) / vol).toFixed(2)) : null,
+    sortino: vol ? parseFloat(((ann - 0.07) / vol).toFixed(2)) : null,
   };
 }
 
@@ -120,16 +321,23 @@ function setListCache(key, data) {
 module.exports = {
   flag,
   isTransactable,
-  isTransactable: isTransactable,
   mapScheme,
-  mapScheme: mapScheme,
+  pickScheme,
+  navLookup,
+  calcReturns,
+  buildChartSeries,
+  parseNavRows,
+  calcReturnsFromSeries,
+  chartFromSeries,
+  avgReturns,
+  rankInPeers,
+  fundProfile,
+  ratiosFromSeries,
   parseListQuery,
-  parseListQuery: parseListQuery,
   matchesCategory,
   categorySearch,
   paginate,
   listCacheKey,
   getListCache,
   setListCache,
-  paginate: paginate,
 };

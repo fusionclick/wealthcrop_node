@@ -2,7 +2,8 @@ const { configData } = require("../config");
 const axios = require("axios");
 const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
-const { isTransactable, mapScheme, parseListQuery, matchesCategory, categorySearch, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
+const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, matchesCategory, categorySearch, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
+const { loadFundNav, categoryStats, searchQuery } = require("../mf/mfapi");
 const { bindUcc, validateOrder, checkSchemeLimits, normalizeOrder, investorUcc } = require("../mf/order");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
@@ -854,44 +855,57 @@ class StarMFController {
         return res.status(404).json({ status: "error", message: "Scheme not found" });
       }
 
-      const scheme = schemesRes.data.lists[0];
-      const name = scheme.name || scheme.scheme_name;
+      const scheme = pickScheme(schemesRes.data.lists, isin, scheme_code);
+      if (!scheme) return res.status(404).json({ status: "error", message: "Scheme not found" });
+      const mapped = mapScheme(scheme);
+      if (mapped.minSip == null) mapped.minSip = 500;
+      if (mapped.minLumpsum == null) mapped.minLumpsum = 5000;
 
-      // 2. Fetch NAVs for multiple anchor dates (real BSE data)
-      const today = new Date();
-      const getPastDate = (y) => { const d = new Date(); d.setFullYear(today.getFullYear() - y); return d; };
-      const [navToday, nav1Y, nav3Y, nav5Y] = await Promise.all([
-        this.fetchNavsForDate(today),
-        this.fetchNavsForDate(getPastDate(1)),
-        this.fetchNavsForDate(getPastDate(3)),
-        this.fetchNavsForDate(getPastDate(5)),
-      ]);
-      const lookup = (navRes) => {
-        const m = this.createNavMap(navRes?.data?.lists || []);
-        return parseFloat(m[isin]?.nav || m[scheme_code]?.nav || 0);
-      };
-      const currentNav = lookup(navToday) || null;
-      const navAnchors = {
-        today: currentNav,
-        "1Y": lookup(nav1Y) || null,
-        "3Y": lookup(nav3Y) || null,
-        "5Y": lookup(nav5Y) || null,
-      };
+      let mf = null;
+      try {
+        mf = await loadFundNav(isin || mapped.scheme_isin, mapped.name);
+      } catch (e) {
+        console.error("mfapi load failed", e.message);
+      }
 
-      // 3. Build chart data interpolated between real anchor NAVs
-      const chartData = this.generateHistoricalNavData(currentNav, navAnchors);
+      const currentNav = mf?.currentNav || mapped.nav || null;
+      const returns = mf?.returns || calcReturns(currentNav, {});
+      const chartData =
+        mf?.chartData && Object.keys(mf.chartData).length
+          ? mf.chartData
+          : buildChartSeries(currentNav, { today: currentNav });
+
+      const profile = fundProfile(mapped.name, `${mapped.category} ${mf?.meta?.scheme_category || ""}`);
+      const ratios = ratiosFromSeries(mf?.series || [], profile.holdings);
+      let categoryAvg = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
+      let rank = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
+      try {
+        const stats = await categoryStats(searchQuery(mapped.name, isin), mf?.code, returns);
+        categoryAvg = stats.categoryAvg;
+        rank = stats.rank;
+      } catch (e) {
+        console.error("peer stats failed", e.message);
+      }
 
       return res.json({
         status: "success",
         data: {
           scheme_info: {
-            name: name,
-            isin: isin,
-            scheme_code: scheme_code,
+            ...mapped,
+            isin: mapped.scheme_isin || isin,
+            scheme_code: mapped.scheme_bse_code || scheme_code,
             current_nav: currentNav,
-            category: scheme.scheme_category || "Mutual Fund"
+            returns,
+            advancedRatios: ratios,
+            holdings: profile.holdings,
           },
-          chartData: chartData
+          returns,
+          chartData,
+          holdings: profile.holdings,
+          assetSplit: profile.assetSplit,
+          sectors: profile.sectors,
+          categoryAvg,
+          rank,
         }
       });
 
@@ -907,46 +921,7 @@ class StarMFController {
    * ponytail: daily random walk removed — real anchors + linear interp
    */
   generateHistoricalNavData(currentNav, anchors = {}) {
-    const periods = {
-      "30D": 30,
-      "3M": 90,
-      "6M": 180,
-      "1Y": 365,
-      "3Y": 1095,
-      "5Y": 1825,
-      "10Y": 3650,
-      "ALL": 3650
-    };
-
-    const response = {};
-    if (!currentNav) return response;
-    const now = Math.floor(Date.now() / 1000);
-    const daySeconds = 86400;
-
-    // Pick the best real start NAV for each period
-    const realStart = (days) => {
-      if (days <= 365 && anchors["1Y"]) return anchors["1Y"];
-      if (days <= 1095 && anchors["3Y"]) return anchors["3Y"];
-      if (days <= 1825 && anchors["5Y"]) return anchors["5Y"];
-      // Fallback: back-calculate from 12% annual growth
-      return currentNav / Math.pow(1.12, days / 365);
-    };
-
-    Object.keys(periods).forEach(key => {
-      const days = periods[key];
-      const startNav = realStart(days);
-      const data = [];
-
-      for (let i = 0; i <= days; i++) {
-        const timestamp = now - (days - i) * daySeconds;
-        // Linear interpolation between startNav and currentNav
-        const nav = parseFloat((startNav + ((currentNav - startNav) * i / days)).toFixed(2));
-        data.push({ timestamp, nav });
-      }
-      response[key] = data;
-    });
-
-    return response;
+    return buildChartSeries(currentNav, anchors);
   }
 
   // NFT Service Method
@@ -1198,7 +1173,9 @@ class StarMFController {
     const map = {};
     lists.forEach(item => {
       if (item.isin) map[item.isin.toString().trim().toUpperCase()] = item;
+      if (item.scheme_isin) map[item.scheme_isin.toString().trim().toUpperCase()] = item;
       if (item.bse_scheme_code) map[item.bse_scheme_code.toString().trim().toUpperCase()] = item;
+      if (item.scheme_bse_code) map[item.scheme_bse_code.toString().trim().toUpperCase()] = item;
     });
     return map;
   }

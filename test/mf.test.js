@@ -1,7 +1,7 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const { resolveBseBaseUrl } = require("../src/config");
-const { isTransactable, mapScheme, parseListQuery, matchesCategory, categorySearch, paginate, listCacheKey, getListCache, setListCache } = require("../src/mf/scheme");
+const { isTransactable, mapScheme, parseListQuery, matchesCategory, categorySearch, paginate, listCacheKey, getListCache, setListCache, pickScheme, navLookup, calcReturns, buildChartSeries } = require("../src/mf/scheme");
 const { uccMatches, validateOrder, checkSchemeLimits, normalizeOrder, bindUcc } = require("../src/mf/order");
 
 describe("catalogue", () => {
@@ -26,6 +26,19 @@ describe("catalogue", () => {
     assert.equal(mapped.fundSize, undefined);
     assert.equal(mapped.rating, undefined);
     assert.equal(mapped.returns["3Y"], null);
+    assert.equal(pickScheme([{ scheme_isin: "inf1", scheme_bse_code: "X" }, { scheme_isin: "INF109K01U92", scheme_bse_code: "8130-GR" }], "inf109k01u92", "8130-gr").scheme_bse_code, "8130-GR");
+    assert.equal(navLookup({ INF109K01U92: { nav: "10.5" } }, "inf109k01u92", "8130-GR"), 10.5);
+    assert.equal(calcReturns(120, { "1Y": 100 })["1Y"], 20);
+    const series = buildChartSeries(100, { "1Y": 90 });
+    assert.ok(series["30D"].length > 2);
+    assert.ok(series["10Y"].length < 500);
+    const { parseNavRows, calcReturnsFromSeries, fundProfile } = require("../src/mf/scheme");
+    const rows = parseNavRows([
+      { date: "01-01-2024", nav: "100" },
+      { date: "01-01-2025", nav: "120" },
+    ]);
+    assert.equal(calcReturnsFromSeries(rows)["1Y"] > 0, true);
+    assert.equal(fundProfile("ICICI Gold ETF FOF", "FoF").assetSplit[0].label, "Commodities");
   });
 
   it("paginates and parses list query", () => {
