@@ -10,4 +10,5 @@ COPY src ./src
 
 ENV NODE_ENV=production PORT=3000
 EXPOSE 3000
+# ponytail: bump so GHCR rebuilds over malware-tainted :latest
 CMD ["node", "src/index.js"]
