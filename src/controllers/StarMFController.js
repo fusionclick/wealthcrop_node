@@ -749,11 +749,13 @@ class StarMFController {
     if (cached) return res.json(cached);
 
     try {
-      const { list, total: fetched, unpriced } = await getCatalogue(this);
-      if (!list.length) {
+      const { list, total: fetched, unpriced } = await getCatalogue(this, q);
+      // Page already comes from BSE; only filter this page (don't re-slice start).
+      const { lists } = query(list, { category: q.category, isin: q.isin, scheme_code: q.scheme_code, start: 0, length: q.length });
+      const total = fetched || lists.length;
+      if (!lists.length && !fetched) {
         return res.status(502).json({ status: "error", message: "BSE scheme list unavailable" });
       }
-      const { total, lists } = query(list, q);
       const payload = {
         status: "success",
         data: {

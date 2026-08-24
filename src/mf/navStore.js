@@ -52,12 +52,16 @@ async function refresh(controller) {
   // record. BSE only fills gaps — its demo snapshot is months stale.
   const amfi = (await getAmfiNavs()).navs;
 
+  // ponytail: skip BSE's 20k nav dump when AMFI already priced the book — that
+  // dump OOMs the 1GB box. BSE only if AMFI is empty (tests / AMFI down).
   let rows = [];
-  try {
-    if (!controller.accessToken) await controller.loginFunc();
-    if (controller.accessToken) rows = (await fetchAll(controller))?.data?.lists || [];
-  } catch (err) {
-    console.error("[nav-store] bse", err.message);
+  if (!Object.keys(amfi).length) {
+    try {
+      if (!controller.accessToken) await controller.loginFunc();
+      if (controller.accessToken) rows = (await fetchAll(controller))?.data?.lists || [];
+    } catch (err) {
+      console.error("[nav-store] bse", err.message);
+    }
   }
   const navs = { ...mapNavRows(rows), ...amfi };
   if (!Object.keys(navs).length) return latest;

@@ -147,7 +147,7 @@ describe("nav store", () => {
     const snap = await store.refresh(fake);
     assert.equal(store.navFor(snap.navs, "INFSHARED"), 241.87, "AMFI wins on overlap");
     assert.equal(store.navDateFor(snap.navs, "INFSHARED"), "24-Aug-2026");
-    assert.equal(store.navFor(snap.navs, "INFBSEONLY"), 10.5, "BSE still fills its own gaps");
+    assert.equal(store.navFor(snap.navs, "INFBSEONLY"), null, "BSE dump skipped when AMFI is present");
 
     // BSE down must not wipe AMFI coverage
     delete require.cache[require.resolve("../src/mf/navStore")];

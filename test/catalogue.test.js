@@ -77,14 +77,14 @@ describe("catalogue", () => {
     delete require.cache[require.resolve("../src/mf/catalogue")];
     const { getCatalogue, query } = require("../src/mf/catalogue");
 
-    const c = controller(2);
-    const cat = await getCatalogue(c);
-    assert.ok(c.pages() > 1, "pages through the master list rather than one huge call");
+    const c = controller(20);
+    const cat = await getCatalogue(c, { start: 0, length: 20 });
+    assert.equal(c.pages(), 1, "one BSE page — full master OOMs production");
     assert.equal(cat.total, 5, "counts everything BSE returned");
 
     const names = cat.list.map((f) => f.name);
     assert.ok(names.includes("LIVE GROWTH FUND"), "AMFI-priced scheme kept");
-    assert.ok(names.includes("BSE ONLY FUND"), "BSE fills the gap AMFI misses");
+    assert.ok(!names.includes("BSE ONLY FUND"), "no BSE nav dump on the list path");
     assert.ok(!names.includes("MATURED FIXED TERM PLAN SERIES 18"), "unpriced matured scheme dropped");
     assert.ok(!names.includes("BLOCKED FUND"), "purchase_allowed:N dropped even though it is priced");
     assert.deepEqual(cat.list.filter((f) => !(f.nav > 0)), [], "no card without a NAV");

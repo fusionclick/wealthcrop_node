@@ -1,26 +1,21 @@
-const { mapScheme, isTransactable, matchesCategory } = require("./scheme");
-const { getNavs, navFor, navDateFor } = require("./navStore");
+const { mapScheme, isTransactable, matchesCategory, categorySearch } = require("./scheme");
+const { getAmfiNavs } = require("./amfiNav");
+const { navFor, navDateFor } = require("./navStore");
 
-// The full BSE scheme master, fetched once per TTL and priced from the NAV store.
-//
-// Schemes with no NAV in AMFI *or* BSE are matured/wound-up (fixed-term plans,
-// FMP series, closed gilt PF plans) — roughly 45% of the 28k rows. They cannot be
-// bought and have no price, so they are dropped rather than shown as blank cards.
-// BSE demo returns null for scheme_status/purchase_allowed, so isTransactable()
-// alone filters nothing; having a NAV is the only reliable liveness signal here.
-//
-// ponytail: whole catalogue in memory (~15k rows). Fine for one box; page against
-// a real datastore if this ever needs multi-instance consistency.
-const TTL_MS = 30 * 60 * 1000;
-const FETCH_PAGE = 5000;
-const MAX_ROWS = 40000;
+// One BSE page per request. Loading the full master (~28k) + BSE nav dump OOMs
+// the 1GB EC2 and nginx returns 502. AMFI prices the page; search goes to BSE.
+const FETCH_MAX = 100;
 
-let cache = { at: 0, list: [], total: 0, unpriced: 0 };
-let inflight = null;
-
-async function fetchPage(controller, start, length) {
+async function fetchPage(controller, start, length, search) {
   const reqObj = {
-    data: { start, length, fields: ["ALL"], count_only: false, filter_param: {}, search: {} },
+    data: {
+      start,
+      length,
+      fields: ["ALL"],
+      count_only: false,
+      filter_param: {},
+      search: search ? { value: search } : {},
+    },
   };
   try {
     return await controller.masterDataService.getSchemeMasterList(controller.accessToken, reqObj);
@@ -32,65 +27,43 @@ async function fetchPage(controller, start, length) {
   }
 }
 
-async function build(controller) {
+async function getCatalogue(controller, q = {}) {
   if (!controller.accessToken) await controller.loginFunc();
-  if (!controller.accessToken) return cache;
+  if (!controller.accessToken) return { list: [], total: 0, unpriced: 0 };
 
-  // Advance by the rows actually returned, not the rows requested: BSE may cap a
-  // page below FETCH_PAGE, and assuming otherwise silently truncates the catalogue.
-  const raw = [];
-  let total = Infinity;
-  let start = 0;
-  while (start < Math.min(total, MAX_ROWS)) {
-    const res = await fetchPage(controller, start, FETCH_PAGE);
-    const rows = res?.data?.lists || [];
-    if (Number.isFinite(Number(res?.data?.count))) total = Number(res.data.count);
-    if (!rows.length) break;
-    raw.push(...rows);
-    start += rows.length;
-  }
-  if (!raw.length) return cache;
+  const start = Number(q.start) || 0;
+  const length = Math.min(FETCH_MAX, Math.max(1, Number(q.length) || 20));
+  const search = String(q.search || q.isin || q.scheme_code || categorySearch(q.category) || "").trim();
+  const fetchLen = Math.min(FETCH_MAX, Math.max(length, length * 2));
 
-  const { navs } = await getNavs(controller);
+  const res = await fetchPage(controller, start, fetchLen, search);
+  const rows = res?.data?.lists || [];
+  const amfi = (await getAmfiNavs()).navs;
   const list = [];
   let unpriced = 0;
-  raw.filter(isTransactable).forEach((row, i) => {
+  rows.filter(isTransactable).forEach((row, i) => {
     const item = mapScheme(row, i);
-    const nav = item.nav ?? navFor(navs, item.scheme_isin, item.scheme_bse_code);
+    const nav = item.nav ?? navFor(amfi, item.scheme_isin, item.scheme_bse_code);
     if (nav == null) {
       unpriced++;
       return;
     }
     item.nav = nav;
-    item.nav_date = navDateFor(navs, item.scheme_isin, item.scheme_bse_code);
+    item.nav_date = item.nav_date || navDateFor(amfi, item.scheme_isin, item.scheme_bse_code);
     item.nav_loaded = true;
     list.push(item);
   });
 
-  cache = { at: Date.now(), list, total: raw.length, unpriced };
-  console.log(`[catalogue] ${list.length} priced of ${raw.length} schemes (${unpriced} unpriced dropped)`);
-  return cache;
-}
-
-/** Cached catalogue; never throws, falls back to the previous snapshot. */
-async function getCatalogue(controller) {
-  if (Date.now() - cache.at < TTL_MS && cache.list.length) return cache;
-  if (!inflight) {
-    inflight = build(controller)
-      .catch((err) => {
-        console.error("[catalogue]", err.message);
-        return cache;
-      })
-      .finally(() => {
-        inflight = null;
-      });
-  }
-  return inflight;
+  const total = Number(res?.data?.count);
+  return {
+    list: list.slice(0, length),
+    total: Number.isFinite(total) ? total : list.length,
+    unpriced,
+  };
 }
 
 const haystack = (f) => `${f.name || ""} ${f.scheme_isin || ""} ${f.scheme_bse_code || ""} ${f.scheme_amc_name || ""}`.toLowerCase();
 
-/** Exact in-memory search + category filter + pagination. */
 function query(list = [], { search = "", category = "", isin = "", scheme_code = "", start = 0, length = 20 } = {}) {
   let rows = list;
   const code = String(isin || scheme_code || "").trim().toUpperCase();
