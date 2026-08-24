@@ -17,12 +17,44 @@ function isTransactable(scheme = {}) {
   return true;
 }
 
+// BSE returns literal "Not Specified" / "NA" for unclassified schemes — treat as blank.
+const BLANK = /^(not specified|na|n\/a|none|-|null)$/i;
+function clean(v) {
+  const s = String(v ?? "").trim();
+  return !s || BLANK.test(s) ? "" : s;
+}
+
+// Fall back to the scheme name when BSE gives no category.
+const NAME_CATEGORIES = [
+  [/\belss\b|tax saver/i, "Equity", "ELSS"],
+  [/large\s*(&|and)\s*mid/i, "Equity", "Large & Mid Cap"],
+  [/\blarge\s*cap\b/i, "Equity", "Large Cap"],
+  [/\bmid\s*cap\b/i, "Equity", "Mid Cap"],
+  [/\bsmall\s*cap\b/i, "Equity", "Small Cap"],
+  [/flexi\s*cap|multi\s*cap/i, "Equity", "Flexi Cap"],
+  [/\bindex\b|\bnifty\b|\bsensex\b|\betf\b/i, "Other", "Index / ETF"],
+  [/\bgold\b|\bsilver\b|precious/i, "Other", "Commodities"],
+  [/pension|retirement|children/i, "Solution Oriented", "Retirement Fund"],
+  [/liquid|overnight|money market/i, "Debt", "Liquid"],
+  [/\bdebt\b|\bbond\b|\bgilt\b|\bincome\b|duration/i, "Debt", "Debt"],
+  [/hybrid|balanced|arbitrage|asset alloc/i, "Hybrid", "Hybrid"],
+  [/\besg\b|thematic|sector|infra|banking|pharma|technolog|healthcare|consumption|global|international/i, "Equity", "Sectoral / Thematic"],
+  [/long term equity|taxgain/i, "Equity", "ELSS"],
+  [/constant maturity|savings fund|treasury|credit risk|corporate bond|banking\s*(&|and)\s*psu/i, "Debt", "Debt"],
+  [/\bcontra\b|value fund|focused|dividend yield|\bequity\b/i, "Equity", "Equity"],
+];
+function categoryFromName(name = "") {
+  const hit = NAME_CATEGORIES.find(([re]) => re.test(name));
+  return hit ? { category: hit[1], sub: hit[2] } : { category: "", sub: "" };
+}
+
 function mapScheme(scheme = {}, index = 0) {
   const name = scheme.name || scheme.scheme_name || "";
   const isin = scheme.scheme_isin || scheme.isin || "";
   const bseCode = scheme.scheme_bse_code || scheme.bse_scheme_code || "";
-  const category = scheme.scheme_category || "";
-  const sub = scheme.scheme_sub_category || "";
+  const guess = categoryFromName(name);
+  const category = clean(scheme.scheme_category) || guess.category;
+  const sub = clean(scheme.scheme_sub_category) || guess.sub;
   const minLumpsum = scheme.min_lumpsum_amount ?? scheme.min_amt ?? scheme.minLumpsum;
   const minSip = scheme.sip_min_amount ?? scheme.min_sip_amount ?? scheme.sip_minimum_amount ?? scheme.sip_min_amt ?? scheme.minSip;
 
@@ -32,7 +64,7 @@ function mapScheme(scheme = {}, index = 0) {
     id: index + 1,
     name,
     category: category || "Mutual Fund",
-    subType: [category, sub].filter(Boolean).join(" • ") || "Mutual Fund",
+    subType: [...new Set([category, sub].filter(Boolean))].join(" • ") || "Mutual Fund",
     scheme_isin: isin,
     scheme_bse_code: bseCode,
     nav: nav != null && nav !== "" ? Number(nav) : null,
@@ -42,12 +74,12 @@ function mapScheme(scheme = {}, index = 0) {
     purchase_allowed: scheme.purchase_allowed ?? scheme.purchase_allow ?? null,
     sip_allowed: scheme.sip_allowed ?? scheme.sip_flag ?? null,
     scheme_status: scheme.scheme_status || scheme.status || null,
-    scheme_plan: scheme.scheme_plan || null,
-    scheme_option: scheme.scheme_option || null,
-    scheme_amc_name: scheme.scheme_amc_name || scheme.amc_name || null,
-    expense: scheme.expense_ratio || scheme.scheme_expense_ratio || scheme.expense || null,
-    exitLoad: scheme.exit_load || scheme.scheme_exit_load || null,
-    risk: scheme.scheme_riskometer || scheme.riskometer || scheme.risk || null,
+    scheme_plan: clean(scheme.scheme_plan) || null,
+    scheme_option: clean(scheme.scheme_option) || null,
+    scheme_amc_name: clean(scheme.scheme_amc_name || scheme.amc_name) || null,
+    expense: clean(scheme.expense_ratio || scheme.scheme_expense_ratio || scheme.expense) || null,
+    exitLoad: clean(scheme.exit_load || scheme.scheme_exit_load) || null,
+    risk: clean(scheme.scheme_riskometer || scheme.riskometer || scheme.risk) || null,
     logoText: name ? name.charAt(0).toUpperCase() : "F",
     returns: { "1Y": null, "3Y": null, "5Y": null },
   };
@@ -85,34 +117,25 @@ function calcReturns(currentNav, anchors = {}) {
   };
 }
 
-function buildChartSeries(currentNav, anchors = {}) {
-  const periods = { "30D": 30, "3M": 90, "6M": 180, "1Y": 365, "3Y": 1095, "5Y": 1825, "10Y": 3650, ALL: 3650 };
-  const response = {};
-  if (!currentNav) return response;
+// Last-resort series when no real NAV history is available: interpolate from the
+// known anchors. Flagged `synthetic` in the API so the UI can label it indicative.
+// ponytail: linear, not a random walk — never invent volatility that did not happen.
+function buildChartSeries(currentNav, returnsPct = {}) {
+  if (!currentNav) return [];
+  const days = 1095;
   const now = Math.floor(Date.now() / 1000);
-  const daySeconds = 86400;
-  const realStart = (days) => {
-    if (days <= 365 && anchors["1Y"]) return anchors["1Y"];
-    if (days <= 1095 && anchors["3Y"]) return anchors["3Y"];
-    if (days <= 1825 && anchors["5Y"]) return anchors["5Y"];
-    return currentNav / Math.pow(1.12, days / 365);
-  };
-  Object.keys(periods).forEach((key) => {
-    const days = periods[key];
-    const startNav = realStart(days);
-    const maxPts = days <= 90 ? days : 360;
-    const step = Math.max(1, Math.round(days / maxPts));
-    const data = [];
-    for (let i = 0; i <= days; i += step) {
-      const timestamp = now - (days - i) * daySeconds;
-      const nav = parseFloat((startNav + ((currentNav - startNav) * i) / days).toFixed(2));
-      data.push({ timestamp, nav });
-    }
-    const lastTs = now;
-    if (data[data.length - 1]?.timestamp !== lastTs) data.push({ timestamp: lastTs, nav: currentNav });
-    response[key] = data;
-  });
-  return response;
+  const cagr = Number(returnsPct["3Y"] ?? returnsPct["1Y"]);
+  const rate = Number.isFinite(cagr) && cagr > -100 ? 1 + cagr / 100 : 1.12;
+  const startNav = currentNav / Math.pow(rate, days / 365);
+  const out = [];
+  for (let i = 0; i <= days; i += 3) {
+    out.push({
+      timestamp: now - (days - i) * 86400,
+      nav: parseFloat((startNav + ((currentNav - startNav) * i) / days).toFixed(4)),
+    });
+  }
+  if (out[out.length - 1].timestamp !== now) out.push({ timestamp: now, nav: currentNav });
+  return out;
 }
 
 function parseMfDate(dateStr) {
@@ -159,20 +182,18 @@ function calcReturnsFromSeries(sorted = []) {
   };
 }
 
-function chartFromSeries(sorted = []) {
-  const periods = { "30D": 30, "3M": 90, "6M": 180, "1Y": 365, "3Y": 1095, "5Y": 1825, "10Y": 3650, ALL: 36500 };
-  const out = {};
-  if (!sorted.length) return out;
-  const last = sorted[sorted.length - 1].timestamp;
-  Object.keys(periods).forEach((key) => {
-    const cut = key === "ALL" ? sorted[0].timestamp : last - periods[key] * 86400;
-    let slice = sorted.filter((p) => p.timestamp >= cut);
-    if (slice.length < 2) slice = sorted.slice(-Math.min(sorted.length, 30));
-    const maxPts = 360;
-    const step = Math.max(1, Math.ceil(slice.length / maxPts));
-    out[key] = slice.filter((_, i) => i % step === 0 || i === slice.length - 1);
-  });
-  return out;
+/**
+ * One flat daily series, oldest first. The client slices the range and buckets the
+ * interval, so the API never has to know which timeframe buttons exist.
+ * Keeps the last year at full daily resolution and thins older history.
+ */
+function chartFromSeries(sorted = [], maxPoints = 3000) {
+  if (sorted.length <= maxPoints) return sorted;
+  const cut = sorted[sorted.length - 1].timestamp - 365 * 86400;
+  const recent = sorted.filter((p) => p.timestamp >= cut);
+  const older = sorted.filter((p) => p.timestamp < cut);
+  const step = Math.max(1, Math.ceil(older.length / Math.max(1, maxPoints - recent.length)));
+  return [...older.filter((_, i) => i % step === 0), ...recent];
 }
 
 function avgReturns(list = []) {

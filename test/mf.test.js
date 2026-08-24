@@ -29,9 +29,15 @@ describe("catalogue", () => {
     assert.equal(pickScheme([{ scheme_isin: "inf1", scheme_bse_code: "X" }, { scheme_isin: "INF109K01U92", scheme_bse_code: "8130-GR" }], "inf109k01u92", "8130-gr").scheme_bse_code, "8130-GR");
     assert.equal(navLookup({ INF109K01U92: { nav: "10.5" } }, "inf109k01u92", "8130-GR"), 10.5);
     assert.equal(calcReturns(120, { "1Y": 100 })["1Y"], 20);
-    const series = buildChartSeries(100, { "1Y": 90 });
-    assert.ok(series["30D"].length > 2);
-    assert.ok(series["10Y"].length < 500);
+    const series = buildChartSeries(100, { "3Y": 12 });
+    assert.ok(series.length > 2 && series.length < 500);
+    assert.ok(series[0].nav < series[series.length - 1].nav);
+    assert.equal(series[series.length - 1].nav, 100);
+    assert.deepEqual(buildChartSeries(null), []);
+    const { chartFromSeries } = require("../src/mf/scheme");
+    assert.equal(chartFromSeries(series).length, series.length);
+    assert.equal(mapScheme({ scheme_name: "ICICI ELSS Tax Saver", scheme_category: "Not Specified" }).subType, "Equity • ELSS");
+    assert.equal(mapScheme({ scheme_name: "X", scheme_riskometer: "Not Specified" }).risk, null);
     const { parseNavRows, calcReturnsFromSeries, fundProfile } = require("../src/mf/scheme");
     const rows = parseNavRows([
       { date: "01-01-2024", nav: "100" },
@@ -53,15 +59,107 @@ describe("catalogue", () => {
     const key = listCacheKey({ category: "mid_cap", search: "MID CAP", start: 0, length: 20 });
     setListCache(key, { ok: 1 });
     assert.equal(getListCache(key).ok, 1);
-    const { mapNavRows } = require("../src/mf/navSocket");
-    const navs = mapNavRows([{ isin: "inf1", bse_scheme_code: "007G", nav: "12.5" }]);
-    assert.equal(navs.INF1, 12.5);
-    assert.equal(navs["007G"], 12.5);
+    const { mapNavRows, navFor, navDateFor } = require("../src/mf/navStore");
+    const navs = mapNavRows([{ isin: "inf1", bse_scheme_code: "007G", nav: "12.5", nav_date: "23-Oct-2025" }]);
+    assert.equal(navFor(navs, "INF1"), 12.5);
+    assert.equal(navFor(navs, null, "007g"), 12.5);
+    assert.equal(navDateFor(navs, "INF1"), "23-Oct-2025");
+    assert.equal(navFor(navs, "MISSING"), null);
   });
 
   it("falls back from unresolved prod host to demo", () => {
     assert.equal(resolveBseBaseUrl("https://starmfv2.bseindia.com"), "https://starmfv2demo.bseindia.com");
     assert.equal(resolveBseBaseUrl("https://starmfv2demo.bseindia.com"), "https://starmfv2demo.bseindia.com");
+  });
+});
+
+describe("nav store", () => {
+  const { mapNavRows, navFor, navDateFor, refresh, getNavs } = require("../src/mf/navStore");
+
+  it("keeps the newest NAV per scheme and drops junk", () => {
+    const dup = [
+      { isin: "INFDUP", nav: "10", nav_date: "01-Jun-2025" },
+      { isin: "INFDUP", nav: "12", nav_date: "28-Dec-2025" },
+      { isin: "INFDUP", nav: "11", nav_date: "23-Oct-2025" },
+    ];
+    assert.equal(navFor(mapNavRows(dup), "INFDUP"), 12);
+    assert.equal(navFor(mapNavRows([...dup].reverse()), "INFDUP"), 12, "order-independent");
+    assert.equal(navDateFor(mapNavRows(dup), "INFDUP"), "28-Dec-2025");
+    assert.deepEqual(mapNavRows([{ isin: "A", nav: "0" }, { isin: "B", nav: "x" }, { isin: "C" }, { nav: "5" }]), {});
+  });
+
+  it("pulls the whole list — the demo has no NAV near today", async () => {
+    // Stub AMFI: this test pins BSE behaviour and must not touch the network.
+    // navStore destructures getAmfiNavs at require time, so reload it after stubbing.
+    const amfiMod = require("../src/mf/amfiNav");
+    const realGet = amfiMod.getAmfiNavs;
+    amfiMod.getAmfiNavs = async () => ({ at: Date.now(), navs: {} });
+    delete require.cache[require.resolve("../src/mf/navStore")];
+    const { refresh, getNavs, navFor } = require("../src/mf/navStore");
+    // Regression: filtering by nav_date (or walking back from today) finds nothing,
+    // because the demo dataset is frozen months in the past.
+    let sent = null;
+    const rows = [
+      { isin: "INF200K01214", bse_scheme_code: "007G", nav: "245.92", nav_date: "23-Oct-2025" },
+      { isin: "INFOLD", nav: "50", nav_date: "01-Jun-2025" },
+      { isin: "INFNEW", nav: "60", nav_date: "28-Dec-2025" },
+    ];
+    let calls = 0;
+    const fake = {
+      accessToken: "t",
+      loginFunc: async () => {},
+      navService: { getNavMasterList: async (_t, r) => ((sent = r), calls++, { data: { lists: rows } }) },
+    };
+    const snap = await refresh(fake);
+    assert.deepEqual(sent.data.filter_param, {}, "no nav_date filter");
+    assert.equal(calls, 1, "one call, no per-day walk-back");
+    assert.equal(snap.loaded, true);
+    assert.equal(snap.date, "28-Dec-2025", "newest date wins even seeded from null");
+    assert.equal(navFor(snap.navs, "inf200k01214"), 245.92, "case-insensitive isin");
+    assert.equal(navFor(snap.navs, null, "007g"), 245.92, "case-insensitive bse code");
+    assert.equal(navFor(snap.navs, "UNLISTED"), null, "absent scheme reports null, not a guess");
+    await getNavs(fake);
+    assert.equal(calls, 1, "cached inside the TTL");
+    amfiMod.getAmfiNavs = realGet;
+  });
+
+  it("prefers AMFI over the stale BSE snapshot", async () => {
+    const amfiMod = require("../src/mf/amfiNav");
+    const realGet = amfiMod.getAmfiNavs;
+    amfiMod.getAmfiNavs = async () => ({
+      at: Date.now(),
+      navs: { INFSHARED: { nav: 241.87, date: "24-Aug-2026" } },
+    });
+    delete require.cache[require.resolve("../src/mf/navStore")];
+    const store = require("../src/mf/navStore");
+    const fake = {
+      accessToken: "t",
+      loginFunc: async () => {},
+      navService: {
+        getNavMasterList: async () => ({
+          data: { lists: [
+            { isin: "INFSHARED", nav: "245.92", nav_date: "23-Oct-2025" },
+            { isin: "INFBSEONLY", nav: "10.5", nav_date: "23-Oct-2025" },
+          ] },
+        }),
+      },
+    };
+    const snap = await store.refresh(fake);
+    assert.equal(store.navFor(snap.navs, "INFSHARED"), 241.87, "AMFI wins on overlap");
+    assert.equal(store.navDateFor(snap.navs, "INFSHARED"), "24-Aug-2026");
+    assert.equal(store.navFor(snap.navs, "INFBSEONLY"), 10.5, "BSE still fills its own gaps");
+
+    // BSE down must not wipe AMFI coverage
+    delete require.cache[require.resolve("../src/mf/navStore")];
+    const store2 = require("../src/mf/navStore");
+    const broken = {
+      accessToken: "t",
+      loginFunc: async () => {},
+      navService: { getNavMasterList: async () => { throw new Error("BSE unreachable"); } },
+    };
+    const snap2 = await store2.refresh(broken);
+    assert.equal(store2.navFor(snap2.navs, "INFSHARED"), 241.87, "AMFI survives a BSE outage");
+    amfiMod.getAmfiNavs = realGet;
   });
 });
 

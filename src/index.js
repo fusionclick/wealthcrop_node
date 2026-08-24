@@ -7,6 +7,7 @@ const dns = require("dns");
 const rootRoute = require("./route/root-route/rootRoute");
 const StarMFController = require("./controllers/StarMFController");
 const { attachNavSocket } = require("./mf/navSocket");
+const { getCatalogue } = require("./mf/catalogue");
 
 if (typeof dns.setDefaultResultOrder === "function") {
   dns.setDefaultResultOrder("ipv4first");
@@ -45,4 +46,9 @@ app.use("/api", rootRoute);
 const port = process.env.PORT || 3000;
 const server = http.createServer(app);
 attachNavSocket(server, StarMFController);
-server.listen(port, () => console.log(`WealthCrop BSE proxy listening on port ${port}`));
+server.listen(port, () => {
+  console.log(`WealthCrop BSE proxy listening on port ${port}`);
+  // Warm the scheme catalogue so the first browser request does not wait on the
+  // full BSE paging run. Failures are logged inside getCatalogue and retried on demand.
+  getCatalogue(StarMFController);
+});

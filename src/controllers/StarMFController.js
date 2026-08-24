@@ -2,8 +2,10 @@ const { configData } = require("../config");
 const axios = require("axios");
 const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
-const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, matchesCategory, categorySearch, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
+const { mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
 const { loadFundNav } = require("../mf/mfapi");
+const { getNavs, navFor, navDateFor } = require("../mf/navStore");
+const { getCatalogue, query } = require("../mf/catalogue");
 const { bindUcc, validateOrder, checkSchemeLimits, normalizeOrder, investorUcc } = require("../mf/order");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
@@ -745,70 +747,24 @@ class StarMFController {
     const cacheKey = listCacheKey(q);
     const cached = getListCache(cacheKey);
     if (cached) return res.json(cached);
-    const special = ["gold_funds", "large_cap", "mid_cap", "small_cap"].includes(q.category);
-    const filterCode = q.scheme_code || q.isin;
-    const reqObj = {
-      data: {
-        start: special || filterCode ? 0 : q.start,
-        length: special ? 50 : filterCode ? 50 : q.length,
-        fields: ["ALL"],
-        count_only: false,
-        filter_param: {},
-        search: { value: filterCode || q.search || categorySearch(q.category) || "" },
-      },
-    };
 
     try {
-      const loginResp = await this.loginFunc();
-      if (loginResp?.status === "error" || !this.accessToken) {
-        return res.status(502).json({
-          status: "error",
-          message: "BSE login failed",
-          detail: loginResp?.message || loginResp?.status || null,
-        });
+      const { list, total: fetched, unpriced } = await getCatalogue(this);
+      if (!list.length) {
+        return res.status(502).json({ status: "error", message: "BSE scheme list unavailable" });
       }
-      let schemesRes;
-      try {
-        schemesRes = await this.masterDataService.getSchemeMasterList(this.accessToken, reqObj);
-      } catch (error) {
-        const isUnauthorized = error.response?.status === 401 ||
-          error.message?.includes("401") ||
-          (error.response?.data && typeof error.response.data === "string" && error.response.data.includes("401 Authorization Required"));
-        if (isUnauthorized) {
-          this.accessToken = null;
-          await this.loginFunc();
-          schemesRes = await this.masterDataService.getSchemeMasterList(this.accessToken, reqObj);
-        } else {
-          throw error;
-        }
-      }
-      if (!schemesRes?.data?.lists) {
-        return res.status(502).json(schemesRes || { status: "error", message: "BSE scheme list unavailable" });
-      }
-
-      let schemes = (schemesRes.data.lists || []).filter(isTransactable);
-      if (filterCode) {
-        const searchCode = filterCode.toUpperCase();
-        schemes = schemes.filter((item) => {
-          const bseCode = String(item.scheme_bse_code || item.bse_scheme_code || "").trim().toUpperCase();
-          const isinCode = String(item.scheme_isin || item.isin || "").trim().toUpperCase();
-          return bseCode === searchCode || isinCode === searchCode;
-        });
-      }
-
-      let finalLists = schemes.map((scheme, index) => mapScheme(scheme, q.start + index));
-      if (q.category) finalLists = finalLists.filter((item) => matchesCategory(item, q.category));
-      if (special) finalLists = finalLists.slice(q.start, q.start + q.length);
-
-      const total = Number(schemesRes.data.count || finalLists.length);
+      const { total, lists } = query(list, q);
       const payload = {
         status: "success",
         data: {
-          count: special || filterCode ? finalLists.length : total,
-          total: special || filterCode ? finalLists.length : total,
+          count: total,
+          total,
           start: q.start,
           length: q.length,
-          lists: finalLists,
+          // Every scheme in `lists` is priced; `unpriced` are matured/wound-up
+          // schemes dropped from the catalogue, surfaced here for observability.
+          catalogue: { priced: list.length, fetched, unpriced },
+          lists,
         },
       };
       setListCache(cacheKey, payload);
@@ -868,12 +824,14 @@ class StarMFController {
         console.error("mfapi load failed", e.message);
       }
 
-      const currentNav = mf?.currentNav || mapped.nav || null;
+      const { navs } = await getNavs(this);
+      const navKeys = [isin || mapped.scheme_isin, scheme_code || mapped.scheme_bse_code];
+      const bseNav = navFor(navs, ...navKeys);
+      const navDate = navDateFor(navs, ...navKeys);
+      const currentNav = bseNav || mf?.currentNav || mapped.nav || null;
       const returns = mf?.returns || calcReturns(currentNav, {});
-      const chartData =
-        mf?.chartData && Object.keys(mf.chartData).length
-          ? mf.chartData
-          : buildChartSeries(currentNav, { today: currentNav });
+      const realSeries = mf?.chartData?.length ? mf.chartData : [];
+      const chartData = realSeries.length ? realSeries : buildChartSeries(currentNav, returns);
 
       const profile = fundProfile(mapped.name, `${mapped.category} ${mf?.meta?.scheme_category || ""}`);
       const ratios = ratiosFromSeries(mf?.series || [], profile.holdings);
@@ -889,12 +847,14 @@ class StarMFController {
             isin: mapped.scheme_isin || isin,
             scheme_code: mapped.scheme_bse_code || scheme_code,
             current_nav: currentNav,
+            nav_date: navDate,
             returns,
             advancedRatios: ratios,
             holdings: profile.holdings,
           },
           returns,
           chartData,
+          synthetic: !realSeries.length,
           holdings: profile.holdings,
           assetSplit: profile.assetSplit,
           sectors: profile.sectors,
@@ -908,15 +868,6 @@ class StarMFController {
       return res.status(500).json({ status: "error", message: error.message });
     }
   };
-
-  /**
-   * Build chart data using real BSE anchor NAVs where available,
-   * linearly interpolating between known points.
-   * ponytail: daily random walk removed — real anchors + linear interp
-   */
-  generateHistoricalNavData(currentNav, anchors = {}) {
-    return buildChartSeries(currentNav, anchors);
-  }
 
   // NFT Service Method
 
