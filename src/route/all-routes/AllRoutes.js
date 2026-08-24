@@ -31,7 +31,7 @@ router.post("/purchaseNewOrder", ...auth, StarMFController.purchaseNewOrder);
 router.post("/updatePurchaseOrder", ...auth, StarMFController.updatePurchaseOrder);
 router.post("/getAllOrders", ...auth, StarMFController.getAllOrders);
 router.post("/getOrder", ...auth, StarMFController.getOrder);
-router.post("/getClientPortfolio", ...auth, StarMFController.getClientPortfolio);
+router.post("/getClientPortfolio", requireInvestor, StarMFController.getClientPortfolio);
 router.post("/cancelPurchaseOrder", ...auth, StarMFController.cancelPurchaseOrder);
 
 // Payments

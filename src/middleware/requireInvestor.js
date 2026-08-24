@@ -3,7 +3,7 @@ const { configData } = require("../config");
 const { uccMatches } = require("../mf/order");
 
 async function requireInvestor(req, res, next) {
-  const auth = req.headers.authorization || "";
+  const auth = String(req.headers.authorization || req.headers.Authorization || "").trim();
   if (!auth.startsWith("Bearer ") || auth.length < 16) {
     return res.status(401).json({ status: "error", message: "Unauthorized" });
   }
