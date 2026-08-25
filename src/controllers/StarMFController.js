@@ -6,7 +6,7 @@ const { mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundPro
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
 const { getCatalogue, query } = require("../mf/catalogue");
-const { bindUcc, validateOrder, checkSchemeLimits, normalizeOrder, investorUcc } = require("../mf/order");
+const { bindUcc, validateOrder, checkSchemeLimits, normalizeOrder, investorUcc, investorMobile, normalizeMobile } = require("../mf/order");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
 const xspRequestData = require("../requestData/xspRequestData");
@@ -668,7 +668,14 @@ class StarMFController {
     if (!limits.ok) {
       return res.status(400).json({ status: "error", message: limits.error });
     }
-    const normalized = normalizeOrder(parsed.order, { ucc, memberCode: this.memberCode });
+    const mobile = investorMobile(req.investor) || normalizeMobile(parsed.order.mobnum);
+    if (!mobile) {
+      return res.status(400).json({
+        status: "error",
+        message: "A valid 10-digit Indian mobile number is required. Update it in your profile before investing.",
+      });
+    }
+    const normalized = normalizeOrder(parsed.order, { ucc, memberCode: this.memberCode, mobile });
     const reqObj = { data: { orders: [normalized] } };
     return this.handleTrxnRequest("purchaseNewOrder", reqObj, res);
   };

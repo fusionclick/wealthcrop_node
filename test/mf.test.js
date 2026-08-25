@@ -251,3 +251,30 @@ describe("bse failure detection", () => {
     assert.equal(bseFailure({ status: "error" }), "BSE rejected the request");
   });
 });
+
+describe("mobile normalization", () => {
+  const { normalizeMobile, investorMobile, normalizeOrder } = require("../src/mf/order");
+  it("strips +91, spaces and leading zeros", () => {
+    assert.equal(normalizeMobile("+91 861 702 9131"), "8617029131");
+    assert.equal(normalizeMobile("08617029131"), "8617029131");
+    assert.equal(normalizeMobile("918617029131"), "8617029131");
+  });
+  it("rejects numbers BSE will not accept", () => {
+    assert.equal(normalizeMobile("1987542630"), "", "Indian mobiles start 6-9");
+    assert.equal(normalizeMobile("12345"), "");
+    assert.equal(normalizeMobile(""), "");
+  });
+  it("falls back to the test account number only for that email", () => {
+    assert.equal(investorMobile({ email: "rminhal783@gmail.com", phone: "1987542630" }), "8617029131");
+    assert.equal(investorMobile({ email: "someone@else.com", phone: "1987542630" }), "");
+    assert.equal(investorMobile({ email: "someone@else.com", phone: "9876543210" }), "9876543210");
+  });
+  it("puts the clean number on the order and every holder", () => {
+    const o = normalizeOrder(
+      { type: "p", amount: 5000, mobnum: "1987542630", holder: [{ holder_rank: "1", mobnum: "1987542630" }] },
+      { ucc: "USRWC003", memberCode: "91010", mobile: "8617029131" }
+    );
+    assert.equal(o.mobnum, "8617029131");
+    assert.equal(o.holder[0].mobnum, "8617029131");
+  });
+});

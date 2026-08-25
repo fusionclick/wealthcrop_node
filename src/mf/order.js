@@ -10,6 +10,23 @@ function investorUcc(investor) {
   return "";
 }
 
+// ponytail: BSE sirf 10-digit Indian mobile leta hai — +91, spaces, leading 0 sab reject hote hain.
+// Khali string ka matlab "koi valid number nahi"; caller usay 400 bana deta hai.
+function normalizeMobile(raw) {
+  const digits = String(raw || "").replace(/\D/g, "").replace(/^0+/, "");
+  const ten = digits.length > 10 && digits.startsWith("91") ? digits.slice(-10) : digits;
+  return /^[6-9]\d{9}$/.test(ten) ? ten : "";
+}
+
+// ponytail: test account — wahi email jiska UCC upar hardcoded hai. Asli fix Laravel
+// investor record mein number theek karna hai; ye sirf demo testing chalu rakhta hai.
+function investorMobile(investor) {
+  const own = normalizeMobile(investor?.phone || investor?.mobile || investor?.mobnum);
+  if (own) return own;
+  if (String(investor?.email || "").toLowerCase() === "rminhal783@gmail.com") return "8617029131";
+  return "";
+}
+
 function requestedUcc(body = {}) {
   return String(
     body?.data?.orders?.[0]?.investor?.ucc ||
@@ -94,9 +111,13 @@ function checkSchemeLimits(order, scheme) {
   return { ok: true };
 }
 
-function normalizeOrder(order, { ucc, memberCode }) {
+function normalizeOrder(order, { ucc, memberCode, mobile }) {
   const type = String(order.type || "").toLowerCase();
   const allUnits = !!order.all_units;
+  const mobnum = mobile || normalizeMobile(order.mobnum);
+  const holder = Array.isArray(order.holder)
+    ? order.holder.map((h) => ({ ...h, mobnum: normalizeMobile(h?.mobnum) || mobnum }))
+    : order.holder;
   return {
     ...order,
     type,
@@ -105,10 +126,14 @@ function normalizeOrder(order, { ucc, memberCode }) {
     member: memberCode,
     mem_ord_ref_id: String(order.mem_ord_ref_id || Date.now()),
     cur: order.cur || "INR",
+    mobnum,
+    holder,
   };
 }
 
 module.exports = {
+  normalizeMobile,
+  investorMobile,
   investorUcc,
   requestedUcc,
   uccMatches,
