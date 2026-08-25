@@ -5,8 +5,11 @@ const ALLOWED_TYPES = new Set(["p", "r"]);
 function investorUcc(investor) {
   const ucc = String(investor?.kyc?.ucc_code || investor?.kyc?.ucc || "").trim();
   if (ucc) return ucc;
-  // ponytail: test account — same email as Laravel forgot-PIN bypass
-  if (String(investor?.email || "").toLowerCase() === "rminhal783@gmail.com") return "USRWC003";
+  // ponytail: test account — same email as Laravel forgot-PIN bypass. USRWC003 ko
+  // BSE ne PENDING_VERIFICATION par atka diya aur wahan order lena band kar diya;
+  // USRWC56442 APPROVED hai. Asli fix user_kycs.ucc_code bharna hai, ye sirf tab
+  // chalta hai jab wo column khali ho.
+  if (String(investor?.email || "").toLowerCase() === "rminhal783@gmail.com") return "USRWC56442";
   return "";
 }
 
