@@ -48,6 +48,11 @@ const bseMessage = (error) => {
   );
 };
 
+// ponytail: browser is prefix par aata hai — container nginx `/api/bse/` ko backend ke
+// `/api/` par bhejta hai, aur `/pg/*` proxy route wahan baitha hai. Alag domain par
+// deploy karo to PUBLIC_PG_PREFIX env se override kar lena.
+const PUBLIC_PG_PREFIX = process.env.PUBLIC_PG_PREFIX || "/api/bse/pg";
+
 class StarMFController {
   constructor() {
     this.loginService = new StarMFService.BseLoginService({
@@ -1280,8 +1285,13 @@ class StarMFController {
         }
       );
 
+      // ponytail: BSE ka link uske apne host par hai jahan user ka browser block hai.
+      // Poore body par replace — link jis bhi key mein ho, proxy ke raaste par mud jaye.
+      const rewritten = JSON.parse(
+        JSON.stringify(response.data).split(`${this.baseUrl}/api/`).join(`${PUBLIC_PG_PREFIX}/`)
+      );
       return res.json({
-        response: response.data,
+        response: rewritten,
       });
     } catch (error) {
       console.error(
@@ -1294,6 +1304,40 @@ class StarMFController {
         message: bseMessage(error),
         detail: error.response?.data || null,
       });
+    }
+  };
+
+  // ponytail: sirf BSE host, aur sirf uske /api/ ke neeche — warna ye open proxy ban
+  // jata hai aur koi bhi hamare server se kisi bhi URL par pohanch jayega (SSRF).
+  proxyPaymentPage = async (req, res) => {
+    const suffix = String(req.params[0] || "").replace(/^\/+/, "");
+    if (!suffix) return res.status(400).send("Missing payment page path");
+    try {
+      const upstream = await axios({
+        method: req.method === "POST" ? "post" : "get",
+        url: `${this.bseDemoUrl}/${suffix}`,
+        data: req.method === "POST" ? req.body : undefined,
+        params: req.query,
+        responseType: "arraybuffer",
+        maxRedirects: 5,
+        timeout: 30000,
+        validateStatus: () => true,
+        httpsAgent: this.insecureAgent,
+      });
+      const type = upstream.headers["content-type"] || "application/octet-stream";
+      res.status(upstream.status).set("content-type", type);
+      if (!/text\/html/i.test(type)) return res.send(Buffer.from(upstream.data));
+      // BSE ke absolute links apne host par jate hain — user ka browser wahan block hai,
+      // is liye unhe wapas is proxy ke raaste par mod do. PUBLIC_PG_PREFIX container
+      // nginx ke `location /api/bse/` se aata hai.
+      const html = Buffer.from(upstream.data)
+        .toString("utf8")
+        .split(`${this.baseUrl}/api/`)
+        .join(`${PUBLIC_PG_PREFIX}/`);
+      return res.send(html);
+    } catch (error) {
+      console.error("Payment page proxy failed:", bseMessage(error));
+      return res.status(502).send("Payment page unavailable");
     }
   };
 

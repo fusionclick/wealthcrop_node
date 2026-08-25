@@ -317,3 +317,17 @@ describe("error message is always a string", () => {
     assert.equal(typeof bseMessage({}), "string");
   });
 });
+
+describe("payment page proxy", () => {
+  const rewrite = (s, base, prefix) => s.split(`${base}/api/`).join(`${prefix}/`);
+  it("points BSE's own links back through the proxy", () => {
+    const base = "https://starmfv2demo.bseindia.com";
+    const body = JSON.stringify({ data: { exch_pg_page_link: `${base}/api/s4/pg_view_object/TOK123` } });
+    const out = JSON.parse(rewrite(body, base, "/api/bse/pg"));
+    assert.equal(out.data.exch_pg_page_link, "/api/bse/pg/s4/pg_view_object/TOK123");
+  });
+  it("leaves other hosts alone", () => {
+    const html = '<a href="https://bank.example/pay">pay</a>';
+    assert.equal(rewrite(html, "https://starmfv2demo.bseindia.com", "/api/bse/pg"), html);
+  });
+});

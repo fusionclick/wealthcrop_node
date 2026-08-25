@@ -38,6 +38,11 @@ router.post("/cancelPurchaseOrder", ...auth, StarMFController.cancelPurchaseOrde
 router.post("/listPaymentDetail", ...auth, StarMFController.listPaymentDetail);
 router.post("/getPaymentDetail", ...auth, StarMFController.getPaymentDetail);
 router.post("/get-payment-link", ...auth, StarMFController.getPaymentLink);
+// ponytail: BSE demo host sirf whitelisted IP se khulta hai, user ka browser block hota
+// hai — is liye page hamare (whitelisted) server se guzarta hai. Auth yahan nahi lag
+// sakti: page ke apne assets/redirects Authorization header nahi bhejte. URL ka
+// pg_view_object token hi credential hai, BSE ne wahi diya hai.
+router.all("/pg/*", StarMFController.proxyPaymentPage);
 router.post("/payment/callback", StarMFController.paymentCallback);
 router.post("/getExchPgService", ...auth, StarMFController.getExchPgService);
 router.post("/sendPaymentInfo", ...auth, StarMFController.sendPaymentInfo);
