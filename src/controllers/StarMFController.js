@@ -20,12 +20,21 @@ const navRequestData = require("../requestData/navRequestData");
 // ponytail: SDK ka _postRequest error ko nigal kar body return kar deta hai, throw nahi karta.
 // Is liye sirf explicit failure marker par error banao — success/absent status ko haath mat lagao,
 // warna jo endpoints abhi chal rahe hain wo tut jayenge.
+// ponytail: BSE galtiyan `messages[]` mein bhejta hai — {msgid, errcode, field, vals}.
+// `field` par order ka ref id prefix hota hai ("726215.depository_acct"), wo hata do.
+const bseMessages = (r) =>
+  (Array.isArray(r?.messages) ? r.messages : [])
+    .map((m) => `${String(m?.field || "field").split(".").pop()} is ${m?.errcode || "invalid"}`)
+    .join("; ");
+
 const bseFailure = (r) => {
   const s = String(r?.status ?? "").toLowerCase();
   const items = Array.isArray(r?.data?.items) ? r.data.items : [];
   const bad = items.find((i) => /error|fail|reject/.test(String(i?.status ?? "").toLowerCase()));
   if (s !== "error" && s !== "failure" && s !== "failed" && !bad) return null;
-  return String(r?.message || bad?.message || bad?.remarks || r?.data?.message || "BSE rejected the request");
+  return String(
+    r?.message || bseMessages(r) || bad?.message || bad?.remarks || r?.data?.message || "BSE rejected the request"
+  );
 };
 
 // ponytail: BSE ka asli reason nikalta hai — UI aur logs dono `message` padhte hain
@@ -709,7 +718,10 @@ class StarMFController {
           fields: ["ALL"],
           start: 0,
           length: 100,
-          filter_param: { ucc: [ucc], status: ["ALLOTTED", "ACCEPTED", "PAID"] },
+          // ponytail: open_close BSE ka required field hai (msgid 522) — khali bhejne par
+          // poora order_list reject hota tha. "C" = settled orders, jo holdings ke liye chahiye.
+          // Agar pending orders bhi chahiye to yahan "O" ke saath doosri call lagegi.
+          filter_param: { ucc: [ucc], status: ["ALLOTTED", "ACCEPTED", "PAID"], open_close: "C" },
         },
       };
       const result = await new Promise((resolve, reject) => {

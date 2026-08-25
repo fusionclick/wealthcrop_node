@@ -278,3 +278,29 @@ describe("mobile normalization", () => {
     assert.equal(o.holder[0].mobnum, "8617029131");
   });
 });
+
+describe("bse messages[] errors", () => {
+  const { bseFailure } = require("../src/controllers/StarMFController");
+  const { normalizeOrder } = require("../src/mf/order");
+  it("names the field BSE complained about", () => {
+    assert.equal(
+      bseFailure({ status: "error", data: {}, messages: [{ msgid: 1522, errcode: "required", field: "726215.depository_acct", vals: [""] }] }),
+      "depository_acct is required",
+      "strips the order-ref prefix off the field"
+    );
+    assert.equal(
+      bseFailure({ status: "error", data: null, messages: [{ msgid: 522, errcode: "required", field: "OpenClose" }] }),
+      "OpenClose is required"
+    );
+  });
+  it("sends physical unless real DP details are present", () => {
+    const base = { type: "p", amount: 5000, phys_or_demat: "d" };
+    const opts = { ucc: "USRWC003", memberCode: "91010", mobile: "8617029131" };
+    assert.equal(normalizeOrder(base, opts).phys_or_demat, "p", "no DP details -> physical");
+    assert.equal(normalizeOrder({ ...base, depository_acct: { dp_id: "", client_id: "" } }, opts).phys_or_demat, "p");
+    assert.equal(
+      normalizeOrder({ ...base, depository_acct: { depository: "CDSL", dp_id: "12345678", client_id: "87654321" } }, opts).phys_or_demat,
+      "d"
+    );
+  });
+});

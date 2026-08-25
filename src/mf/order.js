@@ -118,6 +118,11 @@ function normalizeOrder(order, { ucc, memberCode, mobile }) {
   const holder = Array.isArray(order.holder)
     ? order.holder.map((h) => ({ ...h, mobnum: normalizeMobile(h?.mobnum) || mobnum }))
     : order.holder;
+  // ponytail: demat order par BSE depository_acct {depository, dp_id, client_id} maangta hai
+  // (msgid 1522). Wo details kahin store nahi hotin, is liye physical bhejo — DP data
+  // aane par ye khud "d" par chala jayega.
+  const dp = order.depository_acct;
+  const hasDp = !!(dp && String(dp.dp_id || "").trim() && String(dp.client_id || "").trim());
   return {
     ...order,
     type,
@@ -128,6 +133,7 @@ function normalizeOrder(order, { ucc, memberCode, mobile }) {
     cur: order.cur || "INR",
     mobnum,
     holder,
+    phys_or_demat: hasDp ? "d" : "p",
   };
 }
 
