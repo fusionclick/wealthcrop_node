@@ -344,6 +344,25 @@ describe("payment page proxy", () => {
     assert.equal(upstream(proxify(`${base}/static/pg.css`)), `${base}/static/pg.css`);
   });
 
+  it("retries once with /api when an old-style link 404s", async () => {
+    // Old links were built while the proxy swallowed /api. Both shapes must land.
+    const asked = [];
+    const fetchUpstream = async (path) => {
+      asked.push(path);
+      return { status: path.startsWith("api/") ? 200 : 404 };
+    };
+    const resolve = async (suffix) => {
+      let r = await fetchUpstream(suffix);
+      if (r.status === 404 && !suffix.startsWith("api/")) r = await fetchUpstream(`api/${suffix}`);
+      return r.status;
+    };
+    assert.equal(await resolve("s4/pg_view_object/TOK"), 200);
+    assert.deepEqual(asked, ["s4/pg_view_object/TOK", "api/s4/pg_view_object/TOK"]);
+    asked.length = 0;
+    assert.equal(await resolve("api/s4/pg_view_object/TOK"), 200);
+    assert.equal(asked.length, 1, "new-style link costs one request, no retry");
+  });
+
   it("leaves other hosts alone", () => {
     const html = '<a href="https://bank.example/pay">pay</a>';
     assert.equal(proxify(html), html);

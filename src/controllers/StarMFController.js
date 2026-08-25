@@ -1288,6 +1288,7 @@ class StarMFController {
       // ponytail: BSE ka link uske apne host par hai jahan user ka browser block hai.
       // Poore body par replace — link jis bhi key mein ho, proxy ke raaste par mud jaye.
       const rewritten = JSON.parse(this.proxify(JSON.stringify(response.data)));
+      console.log("Payment link handed to UI:", rewritten?.data?.exch_pg_page_link || "(none)");
       return res.json({
         response: rewritten,
       });
@@ -1321,10 +1322,10 @@ class StarMFController {
       // express.json() sirf JSON parse karta hai — form-encoded body yahan gum ho jayegi.
       console.warn(`Payment proxy: empty POST body for ${suffix} (content-type: ${ctype || "none"})`);
     }
-    try {
-      const upstream = await axios({
+    const fetchUpstream = (path) =>
+      axios({
         method: req.method === "POST" ? "post" : "get",
-        url: `${this.baseUrl}/${suffix}`,
+        url: `${this.baseUrl}/${path}`,
         data: body,
         params: req.query,
         headers: {
@@ -1337,6 +1338,18 @@ class StarMFController {
         validateStatus: () => true,
         httpsAgent: this.insecureAgent,
       });
+    try {
+      let path = suffix;
+      let upstream = await fetchUpstream(path);
+      // ponytail: pehle prefix `/api` ko nigal jata tha, to purane link us ke baghair bane
+      // hain. 404 par ek dafa `api/` laga kar dobara poocho — do try se zyada nahi.
+      if (upstream.status === 404 && !suffix.startsWith("api/")) {
+        path = `api/${suffix}`;
+        upstream = await fetchUpstream(path);
+      }
+      if (upstream.status >= 400) {
+        console.error(`Payment proxy: ${this.baseUrl}/${path} → ${upstream.status}`);
+      }
       const type = upstream.headers["content-type"] || "application/octet-stream";
       res.status(upstream.status).set("content-type", type);
       // HTML, JS aur JSON — teeno mein BSE ke absolute link hote hain; sab ko mod do.
