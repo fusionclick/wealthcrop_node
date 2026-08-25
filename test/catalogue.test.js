@@ -107,3 +107,22 @@ describe("catalogue", () => {
     amfiMod.getAmfiNavs = realGet;
   });
 });
+
+describe("catalogue login failure", () => {
+  it("returns empty and logs the reason when BSE login yields no token", async () => {
+    const { getCatalogue } = require("../src/mf/catalogue");
+    const logged = [];
+    const orig = console.error;
+    console.error = (...a) => logged.push(a.join(" "));
+    try {
+      const res = await getCatalogue({
+        accessToken: null,
+        loginFunc: async () => ({ status: "error", message: "BSE credentials not configured" }),
+      });
+      assert.deepEqual(res, { list: [], total: 0, unpriced: 0 });
+      assert.match(logged.join("\n"), /BSE credentials not configured/);
+    } finally {
+      console.error = orig;
+    }
+  });
+});

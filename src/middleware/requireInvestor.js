@@ -3,9 +3,11 @@ const { configData } = require("../config");
 const { uccMatches } = require("../mf/order");
 
 async function requireInvestor(req, res, next) {
-  const auth = String(req.headers.authorization || req.headers.Authorization || "").trim();
+  const auth = String(
+    req.headers.authorization || req.headers.Authorization || req.headers["x-authorization"] || ""
+  ).trim();
   if (!auth.startsWith("Bearer ") || auth.length < 16) {
-    return res.status(401).json({ status: "error", message: "Unauthorized" });
+    return res.status(401).json({ status: "error", message: "Unauthorized", reason: "no_bearer_token" });
   }
   try {
     const r = await axios.get(configData.investorUrl, {
@@ -14,12 +16,19 @@ async function requireInvestor(req, res, next) {
     });
     const investor = r.data?.data;
     if (!investor || r.data?.status === false) {
-      return res.status(401).json({ status: "error", message: "Unauthorized" });
+      console.error("[auth] rejected by", configData.investorUrl, r.status, r.data?.message);
+      return res.status(401).json({ status: "error", message: "Unauthorized", reason: "token_rejected" });
     }
     req.investor = investor;
     return next();
-  } catch (_) {
-    return res.status(401).json({ status: "error", message: "Unauthorized" });
+  } catch (e) {
+    // ponytail: 401 pehle har wajah ke liye ek jaisa tha — ab reason batata hai
+    const reason = e.response ? "token_rejected" : "upstream_unreachable";
+    console.error(
+      "[auth]", reason, configData.investorUrl,
+      e.response ? `${e.response.status} ${JSON.stringify(e.response.data).slice(0, 200)}` : e.code || e.message
+    );
+    return res.status(401).json({ status: "error", message: "Unauthorized", reason });
   }
 }
 

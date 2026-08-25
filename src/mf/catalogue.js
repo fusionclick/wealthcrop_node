@@ -28,7 +28,11 @@ async function fetchPage(controller, start, length, search) {
 }
 
 async function getCatalogue(controller, q = {}) {
-  if (!controller.accessToken) await controller.loginFunc();
+  if (!controller.accessToken) {
+    const login = await controller.loginFunc();
+    // ponytail: login ki wajah warna gum ho jati thi aur upar sirf 502 dikhta tha
+    if (login?.status === 'error') console.error('[BSE] login failed:', login.message);
+  }
   if (!controller.accessToken) return { list: [], total: 0, unpriced: 0 };
 
   const start = Number(q.start) || 0;

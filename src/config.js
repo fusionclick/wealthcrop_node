@@ -23,19 +23,29 @@ if (baseUrl.includes("starmfv2demo") || process.env.BSE_TLS_INSECURE === "1") {
   axios.defaults.httpsAgent = new https.Agent({ rejectUnauthorized: false });
 }
 
-const webhook = process.env.LARAVEL_WEBHOOK_URL || "";
-const investorFromWebhook = webhook
-  ? webhook.replace(/\/bse\/payment-callback\/?$/, "/investor-data")
-  : "";
+const PROD_INVESTOR = "https://admin.wealthcrop.co/api/internal/investor-data";
+
+function resolveInvestorUrl(
+  explicit = process.env.LARAVEL_INVESTOR_URL,
+  webhook = process.env.LARAVEL_WEBHOOK_URL || ""
+) {
+  const isLocal = (u) => /localhost|127\.0\.0\.1/i.test(u);
+  // ponytail: EC2 par copy ki hui local .env Node ko 127.0.0.1:8000 par bhejti hai —
+  // connect instantly refuse hota hai aur har request 401 ban jaati hai. Production mein
+  // localhost kabhi valid nahi; dev/test mein hai (order.e2e.test.js local stub use karta hai).
+  const dead = process.env.NODE_ENV === "production" && isLocal(String(explicit || ""));
+  if (explicit && !dead) return explicit;
+  const derived = webhook.replace(/\/bse\/payment-callback\/?$/, "/investor-data");
+  if (derived && derived !== webhook && !isLocal(derived)) return derived;
+  return PROD_INVESTOR;
+}
 
 exports.resolveBseBaseUrl = resolveBseBaseUrl;
+exports.resolveInvestorUrl = resolveInvestorUrl;
 exports.configData = {
   username: process.env.BSE_USERNAME || "",
   password: process.env.BSE_PASSWORD || "",
   baseUrl,
   memberCode: process.env.BSE_MEMBER_CODE || "91010",
-  investorUrl:
-    process.env.LARAVEL_INVESTOR_URL ||
-    investorFromWebhook ||
-    "https://admin.wealthcrop.co/api/internal/investor-data",
+  investorUrl: resolveInvestorUrl(),
 };

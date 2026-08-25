@@ -1,6 +1,6 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { resolveBseBaseUrl } = require("../src/config");
+const { resolveBseBaseUrl, resolveInvestorUrl } = require("../src/config");
 const { isTransactable, mapScheme, parseListQuery, matchesCategory, categorySearch, paginate, listCacheKey, getListCache, setListCache, pickScheme, navLookup, calcReturns, buildChartSeries } = require("../src/mf/scheme");
 const { uccMatches, validateOrder, checkSchemeLimits, normalizeOrder, bindUcc } = require("../src/mf/order");
 
@@ -70,6 +70,28 @@ describe("catalogue", () => {
   it("falls back from unresolved prod host to demo", () => {
     assert.equal(resolveBseBaseUrl("https://starmfv2.bseindia.com"), "https://starmfv2demo.bseindia.com");
     assert.equal(resolveBseBaseUrl("https://starmfv2demo.bseindia.com"), "https://starmfv2demo.bseindia.com");
+  });
+
+  it("does not auth investors against localhost derived from a local webhook", () => {
+    assert.equal(
+      resolveInvestorUrl("", "http://127.0.0.1:8000/api/internal/bse/payment-callback"),
+      "https://admin.wealthcrop.co/api/internal/investor-data"
+    );
+    assert.equal(
+      resolveInvestorUrl("http://127.0.0.1:8000/api/internal/investor-data", ""),
+      "http://127.0.0.1:8000/api/internal/investor-data"
+    );
+    assert.equal(
+      resolveInvestorUrl("", "https://admin.wealthcrop.co/api/internal/bse/payment-callback"),
+      "https://admin.wealthcrop.co/api/internal/investor-data"
+    );
+    // prod mein explicit localhost bhi ignore — deployed .env yahi galti karti hai
+    process.env.NODE_ENV = "production";
+    assert.equal(
+      resolveInvestorUrl("http://127.0.0.1:8000/api/internal/investor-data", ""),
+      "https://admin.wealthcrop.co/api/internal/investor-data"
+    );
+    delete process.env.NODE_ENV;
   });
 });
 

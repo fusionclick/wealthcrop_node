@@ -753,7 +753,8 @@ class StarMFController {
       // Page already comes from BSE; only filter this page (don't re-slice start).
       const { lists } = query(list, { category: q.category, isin: q.isin, scheme_code: q.scheme_code, start: 0, length: q.length });
       const total = fetched || lists.length;
-      if (!lists.length && !fetched) {
+      const lookedUp = q.search || q.isin || q.scheme_code || q.category;
+      if (!lists.length && !fetched && !lookedUp) {
         return res.status(502).json({ status: "error", message: "BSE scheme list unavailable" });
       }
       const payload = {
@@ -788,32 +789,29 @@ class StarMFController {
 
       if (!this.accessToken) await this.loginFunc();
 
-      // 1. Fetch current scheme data
-      const reqObj = JSON.parse(JSON.stringify(schemeRequestData.getSchemeMasterList));
-      reqObj.data.search = { value: isin || scheme_code };
-      
-      let schemesRes;
-      try {
-        schemesRes = await this.masterDataService.getSchemeMasterList(this.accessToken, reqObj);
-      } catch (error) {
-        const isUnauthorized = error.response?.status === 401 || 
-                               error.message?.includes('401') || 
-                               (error.response?.data && typeof error.response.data === 'string' && error.response.data.includes("401 Authorization Required"));
-        if (isUnauthorized) {
-          console.log('[Token Expired] Received 401 in getSchemeDetails. Refreshing token...');
+      const searchBse = async (value) => {
+        const reqObj = JSON.parse(JSON.stringify(schemeRequestData.getSchemeMasterList));
+        reqObj.data.search = { value };
+        try {
+          return await this.masterDataService.getSchemeMasterList(this.accessToken, reqObj);
+        } catch (error) {
+          const isUnauthorized = error.response?.status === 401 ||
+                                 error.message?.includes("401") ||
+                                 (error.response?.data && typeof error.response.data === "string" && error.response.data.includes("401 Authorization Required"));
+          if (!isUnauthorized) throw error;
           this.accessToken = null;
           await this.loginFunc();
-          schemesRes = await this.masterDataService.getSchemeMasterList(this.accessToken, reqObj);
-        } else {
-          throw error;
+          return this.masterDataService.getSchemeMasterList(this.accessToken, reqObj);
         }
-      }
+      };
 
-      if (!schemesRes?.data?.lists || schemesRes.data.lists.length === 0) {
-        return res.status(404).json({ status: "error", message: "Scheme not found" });
+      const needles = [...new Set([isin, scheme_code].filter(Boolean))];
+      let scheme = null;
+      for (const value of needles) {
+        const schemesRes = await searchBse(value);
+        scheme = pickScheme(schemesRes?.data?.lists || [], isin, scheme_code);
+        if (scheme) break;
       }
-
-      const scheme = pickScheme(schemesRes.data.lists, isin, scheme_code);
       if (!scheme) return res.status(404).json({ status: "error", message: "Scheme not found" });
       const mapped = mapScheme(scheme);
       if (mapped.minSip == null) mapped.minSip = 500;
@@ -1143,7 +1141,9 @@ class StarMFController {
   }
   async testAPI(req, res) {
     return res.json({
-        msg: "API is working fine"
+        msg: "API is working fine",
+        // ponytail: deployed .env padhne ke liye — hostname bundle mein waise bhi public hai
+        investorUrl: configData.investorUrl
     });
   }
   // Get payment link for an order function
