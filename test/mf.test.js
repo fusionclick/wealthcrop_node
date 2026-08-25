@@ -312,6 +312,7 @@ describe("error message is always a string", () => {
     // straight into `message`, and the UI rendered it as a child.
     const err = { response: { data: { status: "error", data: {}, messages: [{ errcode: "required", field: "amount" }] } } };
     assert.equal(typeof bseMessage(err), "string");
+    assert.equal(bseMessage(err), "amount is required", "reads BSE's messages[] instead of axios' status text");
     assert.equal(typeof bseMessage({ response: { data: "plain text body" } }), "string");
     assert.equal(typeof bseMessage({}), "string");
   });

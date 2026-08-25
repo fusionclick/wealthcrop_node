@@ -41,7 +41,9 @@ const bseFailure = (r) => {
 const bseMessage = (error) => {
   const d = error?.response?.data;
   return String(
-    d?.message || d?.data?.message || d?.errors?.[0]?.message ||
+    // messages[] BSE ki asli shakl hai; iske bagair axios ka "Request failed with
+    // status code 400" bacha reh jata hai, jo user ko kuch nahi batata.
+    d?.message || bseMessages(d) || d?.data?.message || d?.errors?.[0]?.message ||
     error?.message || error?.code || "BSE request failed"
   );
 };
