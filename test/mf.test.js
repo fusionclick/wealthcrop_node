@@ -233,3 +233,21 @@ describe("bse error message", () => {
     assert.equal(bseMessage({}), "BSE request failed");
   });
 });
+
+describe("bse failure detection", () => {
+  const { bseFailure } = require("../src/controllers/StarMFController");
+  it("leaves working responses alone", () => {
+    assert.equal(bseFailure({ status: "success", data: { items: [{ id: 1, status: "ACCEPTED" }] } }), null);
+    assert.equal(bseFailure({ data: { lists: [] } }), null, "absent status is not a failure");
+    assert.equal(bseFailure(undefined), null);
+  });
+  it("catches explicit rejections and names the reason", () => {
+    assert.equal(bseFailure({ status: "failure", message: "UCC not registered" }), "UCC not registered");
+    assert.equal(
+      bseFailure({ status: "success", data: { items: [{ status: "error", message: "scheme not allowed for this member" }] } }),
+      "scheme not allowed for this member",
+      "per-order rejection inside a 200 body"
+    );
+    assert.equal(bseFailure({ status: "error" }), "BSE rejected the request");
+  });
+});

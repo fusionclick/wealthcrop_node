@@ -17,6 +17,17 @@ const fetch2FALinkRequestData = require("../requestData/fetch2FALinkRequestData"
 const mandateRequestData = require("../requestData/mandateRequestData");
 const navRequestData = require("../requestData/navRequestData");
 
+// ponytail: SDK ka _postRequest error ko nigal kar body return kar deta hai, throw nahi karta.
+// Is liye sirf explicit failure marker par error banao — success/absent status ko haath mat lagao,
+// warna jo endpoints abhi chal rahe hain wo tut jayenge.
+const bseFailure = (r) => {
+  const s = String(r?.status ?? "").toLowerCase();
+  const items = Array.isArray(r?.data?.items) ? r.data.items : [];
+  const bad = items.find((i) => /error|fail|reject/.test(String(i?.status ?? "").toLowerCase()));
+  if (s !== "error" && s !== "failure" && s !== "failed" && !bad) return null;
+  return String(r?.message || bad?.message || bad?.remarks || r?.data?.message || "BSE rejected the request");
+};
+
 // ponytail: BSE ka asli reason nikalta hai — UI aur logs dono `message` padhte hain
 const bseMessage = (error) => {
   const d = error?.response?.data;
@@ -395,6 +406,12 @@ class StarMFController {
         this.accessToken,
         requestData
       );
+      console.log(`Response for ${serviceMethod}:`, JSON.stringify(response).slice(0, 2000));
+      const failure = bseFailure(response);
+      if (failure) {
+        console.error(`BSE rejected ${serviceMethod}:`, failure);
+        return res.status(502).json({ status: "error", message: failure, detail: response });
+      }
       return res.json(response);
     } catch (error) {
       const isUnauthorized = error.response?.status === 401 || 
@@ -1311,3 +1328,4 @@ class StarMFController {
 // Export an instance of the class
 module.exports = new StarMFController();
 module.exports.bseMessage = bseMessage;
+module.exports.bseFailure = bseFailure;
