@@ -140,7 +140,44 @@ class StarMFController {
         config.httpsAgent = this.insecureAgent;
         return config;
       });
+      // ponytail: BSE ka token chup-chaap expire hota hai. Gateway 401 "Authorization
+      // Required" ka HTML deta hai aur SDK usay throw karne ke bajaye return kar deta
+      // hai (MasterDataService ka catch errorParser(error).data lauta deta hai), is liye
+      // executeWithRetry ki catch-wali retry kabhi chalti hi nahi thi — token container
+      // restart tak mara rehta tha aur har BSE call 502/khali list deti thi. Ye
+      // interceptor SDK ke catch se pehle chalta hai: 401 par ek naya token le kar wahi
+      // request ek dafa dobara. Ceiling: ek hi retry, aur sirf in SDK services par —
+      // raw axios calls (2FA/payment) apna login khud karte hain.
+      ax.interceptors.response.use(undefined, async (error) => {
+        const cfg = error?.config;
+        if (error?.response?.status !== 401 || !cfg || cfg.__bseRetried) throw error;
+        cfg.__bseRetried = true;
+        const login = await this.refreshToken();
+        if (login?.status === "error") throw error;
+        console.log("[BSE] token expired — refreshed, retrying", cfg.url);
+        // ponytail: AxiosHeaders ko spread karne se purana `authorization` bhi saath aa
+        // jata hai aur kaun jeeta ye tay nahi — is liye set() use karte hain jab mile.
+        const bearer = `Bearer ${this.accessToken}`;
+        if (cfg.headers && typeof cfg.headers.set === "function") cfg.headers.set("Authorization", bearer);
+        else cfg.headers = { ...(cfg.headers || {}), Authorization: bearer };
+        cfg.httpsAgent = this.insecureAgent;
+        return ax.request(cfg);
+      });
     });
+  }
+
+  /**
+   * Naya token, ek waqt mein sirf ek login. Parallel 401s warna kai logins bhejte hain
+   * aur BSE purane session ko invalid kar deta hai — phir sab kuch dobara 401 ho jata.
+   */
+  refreshToken() {
+    if (!this.loginInflight) {
+      this.accessToken = null;
+      this.loginInflight = this.loginFunc().finally(() => {
+        this.loginInflight = null;
+      });
+    }
+    return this.loginInflight;
   }
 
   // Direct Axios BSE Login
@@ -434,8 +471,11 @@ class StarMFController {
   }
 
   async executeWithRetry(serviceInstance, serviceMethod, reqObj, res) {
-    let loginResp;
-    loginResp = await this.loginFunc();
+    // ponytail: pehle har request par ek naya login hota tha — extra round trip aur BSE
+    // par session churn (naya token purane ko mar deta hai, jis se doosri in-flight
+    // request 401 khaati thi). Expiry ab response interceptor sambhalta hai, is liye
+    // login sirf tab jab token hai hi nahi.
+    let loginResp = this.accessToken ? { status: "success" } : await this.loginFunc();
     if (loginResp?.status === "error") {
       return res.status(502).json(loginResp);
     }
