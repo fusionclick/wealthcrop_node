@@ -19,9 +19,20 @@ const navRequestData = require("../requestData/navRequestData");
 
 // ponytail: BSE galtiyan `messages[]` mein bhejta hai — {msgid, errcode, field, vals}.
 // `field` par order ka ref id prefix hota hai ("726215.depository_acct"), wo hata do.
+// errcode jaise ka waisa dikhana ("Scheme is record_not_found") user ko kuch nahi batata.
+const BSE_ERRCODES = {
+  record_not_found: "is not available for transactions on BSE",
+  required: "is required",
+  invalid: "is invalid",
+  not_allowed: "is not allowed",
+};
 const bseMessages = (r) =>
   (Array.isArray(r?.messages) ? r.messages : [])
-    .map((m) => `${String(m?.field || "field").split(".").pop()} is ${m?.errcode || "invalid"}`)
+    .map((m) => {
+      const field = String(m?.field || "field").split(".").pop();
+      const code = String(m?.errcode || "invalid");
+      return `${field} ${BSE_ERRCODES[code] || `is ${code}`}`;
+    })
     .join("; ");
 
 // ponytail: SDK ka _postRequest error ko nigal kar body return kar deta hai, throw nahi karta.
