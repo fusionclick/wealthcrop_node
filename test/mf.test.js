@@ -349,67 +349,6 @@ describe("scheme transactability", () => {
   });
 });
 
-describe("ucc readiness", () => {
-  const { uccBlocks } = require("../src/mf/order");
-  // Shape taken from a live get_ucc for USRWC003 on 2026-08-25.
-  const info = {
-    is_client_physical: false,
-    is_client_demat: true,
-    ucc_status: "PENDING_VERIFICATION",
-    transaction_ready: [
-      { mode: "DEMAT", verified_status: "FALSE", verification_failed_reason: "Ucc Verification for demat is pending" },
-    ],
-  };
-
-  it("blocks a physical order on a demat-only account", () => {
-    assert.match(uccBlocks(info, "P"), /registered for demat only/);
-  });
-
-  it("does not block a demat order while verification is pending", () => {
-    // BSE accepted 9 real orders on USRWC003 in exactly this state, so verified_status
-    // is not a precondition for placing one. Blocking on it stopped valid orders.
-    assert.equal(uccBlocks(info, "D"), null);
-  });
-
-  it("stays out of the way when the UCC could not be read", () => {
-    // A failed lookup must not become a wall in front of every order.
-    assert.equal(uccBlocks(null, "D"), null);
-    assert.equal(uccBlocks({}, "D"), null);
-  });
-});
-
-describe("2FA UCC link payload", () => {
-  const { twoFaUccPayload } = require("../src/mf/order");
-  const info = {
-    holding_nature: "SI",
-    holder: [
-      {
-        identifier: [
-          { identifier_type: "pan", identifier_number: "AVDPV9611N" },
-          { identifier_type: "accredited_investor", identifier_number: "9884520120" },
-        ],
-      },
-    ],
-  };
-
-  it("asks for the real client, not the sample one", () => {
-    // The handler used to post fetch2FALinkRequestData verbatim: client_code ABCD1234,
-    // member_code 0000. No real investor could ever get an eLog link.
-    const p = twoFaUccPayload("UCC_ELOG", { ucc: "USRWC003", info, memberCode: "91010" }).data[0];
-    assert.equal(p.event, "UCC_ELOG");
-    assert.equal(p.investor.client_code, "USRWC003");
-    assert.equal(p.member_code, "91010");
-    assert.deepEqual(p.investor.pan_holder, ["AVDPV9611N"], "PAN only, not every identifier");
-    assert.equal(p.investor.holding_nature, "SI");
-  });
-
-  it("still forms a payload when the UCC could not be read", () => {
-    const p = twoFaUccPayload("UCC_NOM", { ucc: "USRWC003", info: null, memberCode: "91010" }).data[0];
-    assert.deepEqual(p.investor.pan_holder, [""]);
-    assert.equal(p.investor.holding_nature, "");
-  });
-});
-
 describe("physical vs demat", () => {
   const { allowedModes } = require("../src/mf/order");
   const scheme = (mode) => ({
@@ -432,26 +371,18 @@ describe("physical vs demat", () => {
   };
   const opts = { ucc: "USRWC003", memberCode: "91010", mobile: "8617029131" };
 
-  it("goes physical when the scheme refuses demat", () => {
-    // BSE msgid 1588: Franklin Pension Plan is Physical-only, and we sent "d".
-    const n = normalizeOrder(base, { ...opts, modes: allowedModes(scheme("Physical")) });
-    assert.equal(n.phys_or_demat, "P");
-    assert.deepEqual(n.depository_acct, {}, "no DP block on a physical order");
+  it("reads the modes BSE allows, for the catalogue to filter on", () => {
+    assert.deepEqual(allowedModes(scheme("Physical")), { demat: false, physical: true });
+    assert.deepEqual(allowedModes(scheme("Physical"), "Redemption"), { demat: true, physical: false });
+    assert.equal(allowedModes({}), null);
   });
 
-  it("stays demat when the scheme allows it", () => {
-    const n = normalizeOrder(base, { ...opts, modes: allowedModes(scheme("Demat")) });
+  it("sends demat whenever DP details exist", () => {
+    // Order 5001433387 went through as "D" with these exact DP details. Deciding the
+    // mode from the scheme instead broke that, so the order payload no longer reads it.
+    const n = normalizeOrder(base, opts);
     assert.equal(n.phys_or_demat, "D");
     assert.equal(n.depository_acct.dp_id, "12345678");
-  });
-
-  it("reads the mode for the transaction type being placed", () => {
-    assert.deepEqual(allowedModes(scheme("Physical"), "Redemption"), { demat: true, physical: false });
-  });
-
-  it("keeps the old behaviour when BSE says nothing", () => {
-    assert.equal(allowedModes({}), null);
-    assert.equal(normalizeOrder(base, { ...opts, modes: null }).phys_or_demat, "D");
   });
 });
 

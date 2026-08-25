@@ -6,7 +6,7 @@ const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChar
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
 const { getCatalogue, query } = require("../mf/catalogue");
-const { bindUcc, validateOrder, checkSchemeLimits, allowedModes, uccBlocks, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile } = require("../mf/order");
+const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile } = require("../mf/order");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
 const xspRequestData = require("../requestData/xspRequestData");
@@ -718,23 +718,13 @@ class StarMFController {
       });
     }
     const dp = parsed.order.depository_acct?.dp_id ? parsed.order.depository_acct : await this.lookupDepository(ucc);
+    // ponytail: payload wahi jo order 5001433387 par chala tha — scheme code jaisa
+    // frontend bheje, mode DP par, aur koi pre-flight guard nahi. Resolved code aur
+    // allowedModes ne isay tor diya tha; BSE ko khud faisla karne do.
     const normalized = normalizeOrder(
-      {
-        ...parsed.order,
-        // Purane link us code par khule rehte hain jo BSE ab nahi janta — resolved row
-        // ka code bhejo, warna wapas record_not_found.
-        scheme: scheme?.scheme_bse_code || parsed.order.scheme,
-        depository_acct: dp || {},
-      },
-      {
-        ucc,
-        memberCode: this.memberCode,
-        mobile,
-        modes: allowedModes(scheme, String(parsed.order.type).toLowerCase() === "r" ? "Redemption" : "Purchase"),
-      }
+      { ...parsed.order, depository_acct: dp || {} },
+      { ucc, memberCode: this.memberCode, mobile }
     );
-    const blocked = uccBlocks(await this.lookupUcc(ucc), normalized.phys_or_demat);
-    if (blocked) return res.status(400).json({ status: "error", message: blocked });
     const reqObj = { data: { orders: [normalized] } };
     return this.handleTrxnRequest("purchaseNewOrder", reqObj, res);
   };

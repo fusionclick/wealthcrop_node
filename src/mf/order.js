@@ -111,24 +111,6 @@ function checkSchemeLimits(order, scheme) {
   return { ok: true };
 }
 
-// get_ucc ka jawab batata hai ke UCC physical rakh sakta hai ya demat, aur wo mode
-// verify hua bhi hai ya nahi. Ye dono BSE order par cryptic errors banti hain —
-// phys_or_demat "P" par msgid 1020 phys_ucc, aur verify pending par ucc id_not_exist.
-function uccBlocks(info, mode) {
-  if (!info) return null;
-  const wantPhysical = String(mode).toUpperCase() === "P";
-  if (wantPhysical && info.is_client_physical === false) {
-    return "This scheme can only be held physically, but your BSE account is registered for demat only. Ask support to register it for physical holdings.";
-  }
-  if (!wantPhysical && info.is_client_demat === false) {
-    return "Your BSE account is not registered for demat holdings.";
-  }
-  // ponytail: transaction_ready.verified_status par block NAHI karte. USRWC003 ke 9
-  // orders BSE ne tab hi liye jab wo "FALSE" tha — yani BSE khud isay order ki shart
-  // nahi banata. Us par blocking guard sirf hamari inference thi, BSE ka rule nahi.
-  return null;
-}
-
 // 2FA link ki request mein asli UCC jana chahiye. fetch2FALinkRequestData sirf sample
 // hai — usay jaisa ka waisa bhejne se BSE kisi aur (mojood hi nahi) client ka link banata
 // hai. PAN aur holding_nature get_ucc ke record se aate hain.
@@ -156,7 +138,7 @@ function twoFaUccPayload(event, { ucc, info, memberCode }) {
   };
 }
 
-function normalizeOrder(order, { ucc, memberCode, mobile, modes }) {
+function normalizeOrder(order, { ucc, memberCode, mobile }) {
   const type = String(order.type || "").toLowerCase();
   const allUnits = !!order.all_units;
   const mobnum = mobile || normalizeMobile(order.mobnum);
@@ -168,8 +150,6 @@ function normalizeOrder(order, { ucc, memberCode, mobile, modes }) {
   // wo details kahin store nahi hotin; DP data aate hi ye khud "D" par chala jayega.
   const dp = order.depository_acct;
   const hasDp = !!(dp && String(dp.dp_id || "").trim() && String(dp.client_id || "").trim());
-  // modes null = BSE ne kuch nahi bataya, to purana bartao: DP hai to demat.
-  const demat = hasDp && (!modes || modes.demat);
   return {
     ...order,
     type,
@@ -180,8 +160,8 @@ function normalizeOrder(order, { ucc, memberCode, mobile, modes }) {
     cur: order.cur || "INR",
     mobnum,
     holder,
-    phys_or_demat: demat ? "D" : "P",
-    depository_acct: demat ? dp : {},
+    phys_or_demat: hasDp ? "D" : "P",
+    depository_acct: hasDp ? dp : {},
   };
 }
 
@@ -195,7 +175,6 @@ module.exports = {
   validateOrder,
   checkSchemeLimits,
   allowedModes,
-  uccBlocks,
   twoFaUccPayload,
   normalizeOrder,
 };
