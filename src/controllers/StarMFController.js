@@ -26,10 +26,16 @@ const BSE_ERRCODES = {
   invalid: "is invalid",
   not_allowed: "is not allowed",
 };
+// Kuch field aise hain jinka errcode bhi kuch nahi batata — inka poora jumla likha hai.
+const BSE_FIELDS = {
+  phys_ucc:
+    "This scheme can only be held physically, but your BSE account is registered for demat only. Ask support to register it for both.",
+};
 const bseMessages = (r) =>
   (Array.isArray(r?.messages) ? r.messages : [])
     .map((m) => {
       const field = String(m?.field || "field").split(".").pop();
+      if (BSE_FIELDS[field]) return BSE_FIELDS[field];
       const code = String(m?.errcode || "invalid");
       return `${field} ${BSE_ERRCODES[code] || `is ${code}`}`;
     })
