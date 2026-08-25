@@ -722,11 +722,11 @@ class StarMFController {
           fields: ["ALL"],
           start: 0,
           length: 100,
-          // ponytail: shapes orderRequestData/uccRequestData se — member_code data level par
-          // object hai (filter_param mein string nahi), aur open_close lowercase "o" hai.
-          // Uppercase O/C/ALL sab msgid 1579 "invalid" dete hain, probe kar ke dekh liya.
-          member_code: { member_id: this.memberCode },
-          filter_param: { ucc: [ucc], status: ["ALLOTTED", "ACCEPTED", "PAID"], open_close: "o" },
+          // ponytail: sirf yehi shape BSE accept karta hai — member_code filter_param ke
+          // andar string, aur open_close lowercase "o". Data level par member_code (string
+          // ya object) "required" deta hai, array/object filter mein "invalid_json".
+          // status filter yahan mat bhejo, wo unproven hai — neeche JS mein filter karte hain.
+          filter_param: { ucc: [ucc], member_code: this.memberCode, open_close: "o" },
         },
       };
       const result = await new Promise((resolve, reject) => {
@@ -735,7 +735,11 @@ class StarMFController {
           status: (code) => ({ json: (data) => resolve({ ...data, _status: code }) }),
         });
       });
-      const items = result?.data?.items || result?.items || [];
+      // ponytail: order_list `data.lists` deta hai, `items` nahi — success response se
+      // confirmed. Purane keys fallback ke taur par rakhe hain.
+      const HELD = new Set(["ALLOTTED", "ACCEPTED", "PAID"]);
+      const rows = result?.data?.lists || result?.data?.items || result?.items || [];
+      const items = rows.filter((o) => !o?.status || HELD.has(String(o.status).toUpperCase()));
       const holdings = items.map((o) => ({
         scheme_name: o.scheme_name || o.scheme,
         scheme_bse_code: o.scheme,
