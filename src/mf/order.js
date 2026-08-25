@@ -123,16 +123,9 @@ function uccBlocks(info, mode) {
   if (!wantPhysical && info.is_client_demat === false) {
     return "Your BSE account is not registered for demat holdings.";
   }
-  const want = wantPhysical ? "PHYSICAL" : "DEMAT";
-  // get_ucc ise `ucc_status_object` ke andar rakhta hai, top level par nahi.
-  const rows = info.transaction_ready || info.ucc_status_object?.transaction_ready;
-  const ready = (Array.isArray(rows) ? rows : []).find(
-    (r) => String(r?.mode || "").toUpperCase() === want
-  );
-  if (ready && String(ready.verified_status).toUpperCase() === "FALSE") {
-    const why = String(ready.verification_failed_reason || "").trim();
-    return `Your BSE account is not verified for ${want.toLowerCase()} orders yet${why ? ` — ${why}` : ""}.`;
-  }
+  // ponytail: transaction_ready.verified_status par block NAHI karte. USRWC003 ke 9
+  // orders BSE ne tab hi liye jab wo "FALSE" tha — yani BSE khud isay order ki shart
+  // nahi banata. Us par blocking guard sirf hamari inference thi, BSE ka rule nahi.
   return null;
 }
 
