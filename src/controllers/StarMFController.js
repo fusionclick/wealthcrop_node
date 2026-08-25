@@ -2,7 +2,7 @@ const { configData } = require("../config");
 const axios = require("axios");
 const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
-const { mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
+const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
 const { getCatalogue, query } = require("../mf/catalogue");
@@ -704,7 +704,13 @@ class StarMFController {
     }
     const dp = parsed.order.depository_acct?.dp_id ? parsed.order.depository_acct : await this.lookupDepository(ucc);
     const normalized = normalizeOrder(
-      { ...parsed.order, depository_acct: dp || {} },
+      {
+        ...parsed.order,
+        // Purane link us code par khule rehte hain jo BSE ab nahi janta — resolved row
+        // ka code bhejo, warna wapas record_not_found.
+        scheme: scheme?.scheme_bse_code || parsed.order.scheme,
+        depository_acct: dp || {},
+      },
       { ucc, memberCode: this.memberCode, mobile }
     );
     const reqObj = { data: { orders: [normalized] } };
@@ -849,11 +855,20 @@ class StarMFController {
     await this.loginFunc();
     const schemesRes = await this.masterDataService.getSchemeMasterList(this.accessToken, reqObj);
     const lists = schemesRes?.data?.lists || [];
-    return lists.find((item) => {
-      const bseCode = String(item.scheme_bse_code || item.bse_scheme_code || "").trim().toUpperCase();
-      const isinCode = String(item.scheme_isin || item.isin || "").trim().toUpperCase();
-      return bseCode === needle || isinCode === needle;
-    }) || null;
+    const codeOf = (r) => String(r?.scheme_bse_code || r?.bse_scheme_code || "").trim().toUpperCase();
+    const isinOf = (r) => String(r?.scheme_isin || r?.isin || "").trim().toUpperCase();
+    const matches = lists.filter((r) => codeOf(r) === needle || isinOf(r) === needle);
+    const live = matches.find(isTransactable);
+    if (live) return live;
+    const dead = matches[0];
+    if (!dead) return null;
+    // ponytail: BSE purane code ka mara hua row bhi rakhta hai (011-DP, is_active false)
+    // jab ke chalta hua row naye code par hota hai (FR011-DP). Wahi ISIN + wahi code
+    // suffix = wahi scheme, wahi plan/option — DP kabhi DR nahi ban jayega.
+    return (
+      lists.find((r) => isTransactable(r) && isinOf(r) === isinOf(dead) && codeOf(r).endsWith(needle)) ||
+      dead
+    );
   }
 
   getSchemeMasterList = async (req, res) => {

@@ -336,6 +336,41 @@ describe("scheme transactability", () => {
   });
 });
 
+describe("scheme code resolution", () => {
+  // BSE keeps a dead row on the old code (011-DP) beside the live one (FR011-DP).
+  // Links minted before the filter landed still carry the dead code.
+  const lists = [
+    { scheme_bse_code: "011-DP", scheme_isin: "INF090I01536", is_active: false },
+    { scheme_bse_code: "FR011-DP", scheme_isin: "INF090I01536", is_active: true },
+    { scheme_bse_code: "FR011-DR", scheme_isin: "INF090I01536", is_active: true },
+  ];
+  const codeOf = (r) => String(r?.scheme_bse_code || "").trim().toUpperCase();
+  const isinOf = (r) => String(r?.scheme_isin || "").trim().toUpperCase();
+  const resolve = (needle) => {
+    const matches = lists.filter((r) => codeOf(r) === needle || isinOf(r) === needle);
+    const live = matches.find(isTransactable);
+    if (live) return live;
+    const dead = matches[0];
+    if (!dead) return null;
+    return (
+      lists.find((r) => isTransactable(r) && isinOf(r) === isinOf(dead) && codeOf(r).endsWith(needle)) || dead
+    );
+  };
+
+  it("follows a retired code to the live scheme", () => {
+    assert.equal(resolve("011-DP").scheme_bse_code, "FR011-DP");
+  });
+
+  it("never crosses the payout/reinvestment line", () => {
+    // Same ISIN on both rows here, so ISIN alone would be enough to pick DR. It must not.
+    assert.notEqual(resolve("011-DP").scheme_bse_code, "FR011-DR");
+  });
+
+  it("returns nothing when the code is unknown", () => {
+    assert.equal(resolve("NOPE-GR"), null);
+  });
+});
+
 describe("payment page proxy", () => {
   const base = "https://starmfv2demo.bseindia.com";
   const prefix = "/api/bse/pg";
