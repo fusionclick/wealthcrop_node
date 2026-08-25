@@ -1052,11 +1052,13 @@ class StarMFController {
   async fetch2FAUcc(serviceMethod, event, req, res) {
     const ucc = req.ucc || investorUcc(req.investor);
     if (!ucc) return res.status(400).json({ status: "error", message: "UCC is required" });
-    const reqObj = twoFaUccPayload(event, {
-      ucc,
-      info: await this.lookupUcc(ucc),
-      memberCode: this.memberCode,
-    });
+    // ponytail: UCC na mile to PAN khali jata hai aur BSE cryptic 507 deta hai —
+    // "No valid responses generated". Yahin rok do, wajah saaf rahegi.
+    const info = await this.lookupUcc(ucc);
+    if (!info) {
+      return res.status(404).json({ status: "error", message: `UCC ${ucc} not found on BSE` });
+    }
+    const reqObj = twoFaUccPayload(event, { ucc, info, memberCode: this.memberCode });
     return this.handleFetch2FALinkRequest(serviceMethod, reqObj, res);
   }
 
