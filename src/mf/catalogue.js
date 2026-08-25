@@ -1,4 +1,4 @@
-const { mapScheme, isTransactable, matchesCategory, categorySearch } = require("./scheme");
+const { mapScheme, isTransactable, allowedModes, matchesCategory, categorySearch } = require("./scheme");
 const { getAmfiNavs } = require("./amfiNav");
 const { navFor, navDateFor } = require("./navStore");
 
@@ -45,7 +45,11 @@ async function getCatalogue(controller, q = {}) {
   const amfi = (await getAmfiNavs()).navs;
   const list = [];
   let unpriced = 0;
-  rows.filter(isTransactable).forEach((row, i) => {
+  // ponytail: add_ucc har UCC demat par banata hai (is_client_physical false), is liye
+  // physical-only scheme khareedi hi nahi ja sakti — BSE msgid 1020 phys_ucc deta hai.
+  // List se bahar. UCC kabhi "both" par bane to ye filter hata dena.
+  const buyable = (row) => allowedModes(row)?.demat !== false;
+  rows.filter(isTransactable).filter(buyable).forEach((row, i) => {
     const item = mapScheme(row, i);
     const nav = item.nav ?? navFor(amfi, item.scheme_isin, item.scheme_bse_code);
     if (nav == null) {

@@ -244,12 +244,11 @@ class StarMFController {
                   {
                       "holder_rank": "1",
                       "occ_code": "02",
-                      // ponytail: "M" (manual) ka matlab hai investor AOF form jama karay,
-                      // jiska app mein koi upload flow nahi — UCC hamesha
-                      // PENDING_VERIFICATION par atka reh jata tha aur koi order nahi lagta.
-                      // "E" par eLog link banta hai (get2FAUccElog), investor e-sign kar
-                      // leta hai. AOF upload ban jaye to yahan wapas "M" chal sakta hai.
-                      "auth_mode": "E",
+                      // ponytail: "M" hi theek hai — isi par order 5001433387 laga tha.
+                      // UCC dobara submit karne se verification pending ho jati hai aur
+                      // BSE ka RTA batch use khud verify karta hai; auth_mode ka us se
+                      // koi taalluq nahi. Bila zaroorat mat chherna.
+                      "auth_mode": "M",
                       "is_pan_exempt": false,
                       "pan_exempt_category": "",
                       "identifier": [

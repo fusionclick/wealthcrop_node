@@ -471,6 +471,29 @@ describe("physical vs demat", () => {
   });
 });
 
+describe("catalogue hides what cannot be bought", () => {
+  const { allowedModes } = require("../src/mf/scheme");
+  const buyable = (row) => allowedModes(row)?.demat !== false;
+  const row = (mode) => ({
+    lumpsum: [
+      {
+        scheme_transaction_type: "Purchase",
+        scheme_transaction_mode_allowed: [{ scheme_transaction_mode_demat_physical_allowed: mode }],
+      },
+    ],
+  });
+
+  it("drops physical-only schemes", () => {
+    assert.equal(buyable(row("Physical")), false);
+    assert.equal(buyable(row("Demat")), true);
+  });
+
+  it("keeps a scheme when BSE states no mode", () => {
+    // Silence must not empty the catalogue.
+    assert.equal(buyable({}), true);
+  });
+});
+
 describe("scheme code resolution", () => {
   // BSE keeps a dead row on the old code (011-DP) beside the live one (FR011-DP).
   // Links minted before the filter landed still carry the dead code.
