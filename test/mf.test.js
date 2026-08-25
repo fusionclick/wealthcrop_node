@@ -314,6 +314,19 @@ describe("error message is always a string", () => {
     assert.equal(typeof bseMessage(err), "string");
     assert.equal(bseMessage(err), "amount is required", "reads BSE's messages[] instead of axios' status text");
     assert.equal(typeof bseMessage({ response: { data: "plain text body" } }), "string");
+    // BSE puts the actual reason in vals; dropping it left "get_2fa_link was not found".
+    const withVals = {
+      response: {
+        data: {
+          messages: [
+            { errcode: "record_not_found", field: "get_2fa_link", vals: ["No valid responses generated for the provided requests"] },
+          ],
+        },
+      },
+    };
+    assert.match(bseMessage(withVals), /No valid responses generated/);
+    const codeOnly = { response: { data: { messages: [{ errcode: "not_allowed", field: "x.PhysOrDemat", vals: ["d"] }] } } };
+    assert.equal(bseMessage(codeOnly), "PhysOrDemat is not allowed", "a bare flag is not an explanation");
     assert.equal(typeof bseMessage({}), "string");
   });
 });

@@ -21,7 +21,8 @@ const navRequestData = require("../requestData/navRequestData");
 // `field` par order ka ref id prefix hota hai ("726215.depository_acct"), wo hata do.
 // errcode jaise ka waisa dikhana ("Scheme is record_not_found") user ko kuch nahi batata.
 const BSE_ERRCODES = {
-  record_not_found: "is not available for transactions on BSE",
+  // Har field scheme nahi hoti — get_2fa_link par bhi yehi errcode aata hai.
+  record_not_found: "was not found on BSE",
   required: "is required",
   invalid: "is invalid",
   not_allowed: "is not allowed",
@@ -37,7 +38,11 @@ const bseMessages = (r) =>
       const field = String(m?.field || "field").split(".").pop();
       if (BSE_FIELDS[field]) return BSE_FIELDS[field];
       const code = String(m?.errcode || "invalid");
-      return `${field} ${BSE_ERRCODES[code] || `is ${code}`}`;
+      const base = `${field} ${BSE_ERRCODES[code] || `is ${code}`}`;
+      // BSE `vals` mein asli wajah likh deta hai ("No valid responses generated..."),
+      // aur hum use phenk rahe the. Sirf jumle uthao, code/flag nahi.
+      const why = (Array.isArray(m?.vals) ? m.vals : []).find((v) => typeof v === "string" && v.includes(" "));
+      return why ? `${base} — ${why}` : base;
     })
     .join("; ");
 
