@@ -352,6 +352,18 @@ describe("ucc readiness", () => {
     assert.match(uccBlocks(info, "P"), /registered for demat only/);
   });
 
+  it("finds transaction_ready where get_ucc actually puts it", () => {
+    // It is nested under ucc_status_object; reading the top level found nothing and
+    // every order sailed past the guard into a BSE rejection.
+    const nested = {
+      is_client_demat: true,
+      ucc_status_object: {
+        transaction_ready: [{ mode: "DEMAT", verified_status: "FALSE", verification_failed_reason: "pending" }],
+      },
+    };
+    assert.match(uccBlocks(nested, "D"), /not verified for demat orders yet/);
+  });
+
   it("blocks a demat order while verification is pending", () => {
     assert.match(uccBlocks(info, "D"), /not verified for demat orders yet/);
     assert.match(uccBlocks(info, "D"), /Verification for demat is pending/, "carries BSE's own reason");

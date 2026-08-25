@@ -124,7 +124,9 @@ function uccBlocks(info, mode) {
     return "Your BSE account is not registered for demat holdings.";
   }
   const want = wantPhysical ? "PHYSICAL" : "DEMAT";
-  const ready = (Array.isArray(info.transaction_ready) ? info.transaction_ready : []).find(
+  // get_ucc ise `ucc_status_object` ke andar rakhta hai, top level par nahi.
+  const rows = info.transaction_ready || info.ucc_status_object?.transaction_ready;
+  const ready = (Array.isArray(rows) ? rows : []).find(
     (r) => String(r?.mode || "").toUpperCase() === want
   );
   if (ready && String(ready.verified_status).toUpperCase() === "FALSE") {
