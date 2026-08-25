@@ -336,6 +336,39 @@ describe("scheme transactability", () => {
   });
 });
 
+describe("ucc readiness", () => {
+  const { uccBlocks } = require("../src/mf/order");
+  // Shape taken from a live get_ucc for USRWC003 on 2026-08-25.
+  const info = {
+    is_client_physical: false,
+    is_client_demat: true,
+    ucc_status: "PENDING_VERIFICATION",
+    transaction_ready: [
+      { mode: "DEMAT", verified_status: "FALSE", verification_failed_reason: "Ucc Verification for demat is pending" },
+    ],
+  };
+
+  it("blocks a physical order on a demat-only account", () => {
+    assert.match(uccBlocks(info, "P"), /registered for demat only/);
+  });
+
+  it("blocks a demat order while verification is pending", () => {
+    assert.match(uccBlocks(info, "D"), /not verified for demat orders yet/);
+    assert.match(uccBlocks(info, "D"), /Verification for demat is pending/, "carries BSE's own reason");
+  });
+
+  it("lets a verified account through", () => {
+    const ok = { ...info, transaction_ready: [{ mode: "DEMAT", verified_status: "TRUE" }] };
+    assert.equal(uccBlocks(ok, "D"), null);
+  });
+
+  it("stays out of the way when the UCC could not be read", () => {
+    // A failed lookup must not become a wall in front of every order.
+    assert.equal(uccBlocks(null, "D"), null);
+    assert.equal(uccBlocks({}, "D"), null);
+  });
+});
+
 describe("physical vs demat", () => {
   const { allowedModes } = require("../src/mf/order");
   const scheme = (mode) => ({

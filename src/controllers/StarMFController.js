@@ -6,7 +6,7 @@ const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChar
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
 const { getCatalogue, query } = require("../mf/catalogue");
-const { bindUcc, validateOrder, checkSchemeLimits, allowedModes, normalizeOrder, investorUcc, investorMobile, normalizeMobile } = require("../mf/order");
+const { bindUcc, validateOrder, checkSchemeLimits, allowedModes, uccBlocks, normalizeOrder, investorUcc, investorMobile, normalizeMobile } = require("../mf/order");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
 const xspRequestData = require("../requestData/xspRequestData");
@@ -724,6 +724,8 @@ class StarMFController {
         modes: allowedModes(scheme, String(parsed.order.type).toLowerCase() === "r" ? "Redemption" : "Purchase"),
       }
     );
+    const blocked = uccBlocks(await this.lookupUcc(ucc), normalized.phys_or_demat);
+    if (blocked) return res.status(400).json({ status: "error", message: blocked });
     const reqObj = { data: { orders: [normalized] } };
     return this.handleTrxnRequest("purchaseNewOrder", reqObj, res);
   };
@@ -826,11 +828,14 @@ class StarMFController {
   // order bina depository_acct ke reject hota hai (msgid 1522) aur "P" bhejna bhi
   // not_allowed hai. UCC shayad hi badalta hai, is liye process-level cache — stale
   // lage to container restart kaafi hai, TTL ki zaroorat tab hai jab DP details badlein.
-  _depositoryCache = {};
-  async lookupDepository(ucc) {
+  // ponytail: 60s TTL — UCC verify hone par cache khud bhool jaye, warna "pending"
+  // hamesha ke liye chipak jata hai aur theek hone ke baad bhi order rukta rehta hai.
+  _uccCache = {};
+  async lookupUcc(ucc) {
     if (!ucc) return null;
-    if (this._depositoryCache[ucc] !== undefined) return this._depositoryCache[ucc];
-    let dp = null;
+    const hit = this._uccCache[ucc];
+    if (hit && Date.now() < hit.exp) return hit.data;
+    let info = null;
     try {
       if (!this.accessToken) await this.loginFunc();
       const { data } = await axios.post(
@@ -838,23 +843,23 @@ class StarMFController {
         { data: { member_code: { member_id: this.memberCode }, investor: { client_code: ucc } } },
         { headers: { Authorization: `Bearer ${this.accessToken}` } }
       );
-      const acct = (data?.data?.depository || []).find((d) => d?.dp_id && d?.client_id);
-      if (acct) {
-        // ponytail: key `depository` hai (iske bagair "required" aata hai), lekin value
-        // UCC wala "CDSL" nahi — usay BSE "invalid" kehta hai. StarMF single-letter code
-        // leta hai: CDSL=C, NSDL=N. Aur koi depository hai nahi, is liye do-tarfa map bas.
-        const code = String(acct.depository_code || "").toUpperCase();
-        dp = {
-          depository: code.startsWith("N") ? "N" : "C",
-          dp_id: acct.dp_id,
-          client_id: acct.client_id,
-        };
-      }
+      info = data?.data || null;
     } catch (error) {
-      console.error("UCC depository lookup failed:", bseMessage(error));
+      console.error("UCC lookup failed:", bseMessage(error));
     }
-    this._depositoryCache[ucc] = dp;
-    return dp;
+    this._uccCache[ucc] = { data: info, exp: Date.now() + 60000 };
+    return info;
+  }
+
+  async lookupDepository(ucc) {
+    const info = await this.lookupUcc(ucc);
+    const acct = (info?.depository || []).find((d) => d?.dp_id && d?.client_id);
+    if (!acct) return null;
+    // ponytail: key `depository` hai (iske bagair "required" aata hai), lekin value
+    // UCC wala "CDSL" nahi — usay BSE "invalid" kehta hai. StarMF single-letter code
+    // leta hai: CDSL=C, NSDL=N. Aur koi depository hai nahi, is liye do-tarfa map bas.
+    const code = String(acct.depository_code || "").toUpperCase();
+    return { depository: code.startsWith("N") ? "N" : "C", dp_id: acct.dp_id, client_id: acct.client_id };
   }
 
   async lookupScheme(code) {

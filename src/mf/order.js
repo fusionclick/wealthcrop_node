@@ -126,6 +126,29 @@ function allowedModes(scheme, txnType = "Purchase") {
   return { demat: modes.includes("demat"), physical: modes.includes("physical") };
 }
 
+// get_ucc ka jawab batata hai ke UCC physical rakh sakta hai ya demat, aur wo mode
+// verify hua bhi hai ya nahi. Ye dono BSE order par cryptic errors banti hain —
+// phys_or_demat "P" par msgid 1020 phys_ucc, aur verify pending par ucc id_not_exist.
+function uccBlocks(info, mode) {
+  if (!info) return null;
+  const wantPhysical = String(mode).toUpperCase() === "P";
+  if (wantPhysical && info.is_client_physical === false) {
+    return "This scheme can only be held physically, but your BSE account is registered for demat only. Ask support to register it for physical holdings.";
+  }
+  if (!wantPhysical && info.is_client_demat === false) {
+    return "Your BSE account is not registered for demat holdings.";
+  }
+  const want = wantPhysical ? "PHYSICAL" : "DEMAT";
+  const ready = (Array.isArray(info.transaction_ready) ? info.transaction_ready : []).find(
+    (r) => String(r?.mode || "").toUpperCase() === want
+  );
+  if (ready && String(ready.verified_status).toUpperCase() === "FALSE") {
+    const why = String(ready.verification_failed_reason || "").trim();
+    return `Your BSE account is not verified for ${want.toLowerCase()} orders yet${why ? ` — ${why}` : ""}.`;
+  }
+  return null;
+}
+
 function normalizeOrder(order, { ucc, memberCode, mobile, modes }) {
   const type = String(order.type || "").toLowerCase();
   const allUnits = !!order.all_units;
@@ -165,5 +188,6 @@ module.exports = {
   validateOrder,
   checkSchemeLimits,
   allowedModes,
+  uccBlocks,
   normalizeOrder,
 };

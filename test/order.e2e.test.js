@@ -38,6 +38,8 @@ before(async () => {
   // Demat details BSE holds against the UCC — stubbed like every other BSE call here,
   // otherwise the order path reaches out to the real gateway.
   controller.lookupDepository = async () => ({ depository: "C", dp_id: "12345678", client_id: "12345678" });
+  // Stub the UCC read too — unstubbed it calls BSE and the suite takes 20s.
+  controller.lookupUcc = async () => ({ is_client_demat: true, transaction_ready: [{ mode: "DEMAT", verified_status: "TRUE" }] });
   controller.trxnService.purchaseNewOrder = async (_t, payload) => {
     sent = payload;
     return bseResponse;
