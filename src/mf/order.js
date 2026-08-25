@@ -136,6 +136,33 @@ function uccBlocks(info, mode) {
   return null;
 }
 
+// 2FA link ki request mein asli UCC jana chahiye. fetch2FALinkRequestData sirf sample
+// hai — usay jaisa ka waisa bhejne se BSE kisi aur (mojood hi nahi) client ka link banata
+// hai. PAN aur holding_nature get_ucc ke record se aate hain.
+function twoFaUccPayload(event, { ucc, info, memberCode }) {
+  const pans = (info?.holder || [])
+    .map(
+      (h) =>
+        (h?.identifier || []).find((i) => String(i?.identifier_type || "").toLowerCase() === "pan")
+          ?.identifier_number
+    )
+    .filter(Boolean);
+  return {
+    data: [
+      {
+        event,
+        investor: {
+          client_code: ucc,
+          pan_holder: pans.length ? pans : [""],
+          holding_nature: info?.holding_nature || "",
+        },
+        parent_client_code: "",
+        member_code: memberCode,
+      },
+    ],
+  };
+}
+
 function normalizeOrder(order, { ucc, memberCode, mobile, modes }) {
   const type = String(order.type || "").toLowerCase();
   const allUnits = !!order.all_units;
@@ -176,5 +203,6 @@ module.exports = {
   checkSchemeLimits,
   allowedModes,
   uccBlocks,
+  twoFaUccPayload,
   normalizeOrder,
 };

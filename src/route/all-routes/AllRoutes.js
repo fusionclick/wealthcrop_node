@@ -63,8 +63,8 @@ router.post("/nftNomineeChange", StarMFController.nftNomineeChange);
 router.post("/nftContactChange", StarMFController.nftContactChange);
 
 // 2FA
-router.post("/get2FAUccNom", StarMFController.get2FAUccNom);
-router.post("/get2FAUccElog", StarMFController.get2FAUccElog);
+router.post("/get2FAUccNom", requireInvestor, StarMFController.get2FAUccNom);
+router.post("/get2FAUccElog", requireInvestor, StarMFController.get2FAUccElog);
 router.post("/get2FAVerifyMandateCancel", StarMFController.get2FAVerifyMandateCancel);
 router.post("/get2FAVerifySxpReg", StarMFController.get2FAVerifySxpReg);
 router.post("/get2FAVerifyOrderCancel", StarMFController.get2FAVerifyOrderCancel);

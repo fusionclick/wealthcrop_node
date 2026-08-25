@@ -6,7 +6,7 @@ const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChar
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
 const { getCatalogue, query } = require("../mf/catalogue");
-const { bindUcc, validateOrder, checkSchemeLimits, allowedModes, uccBlocks, normalizeOrder, investorUcc, investorMobile, normalizeMobile } = require("../mf/order");
+const { bindUcc, validateOrder, checkSchemeLimits, allowedModes, uccBlocks, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile } = require("../mf/order");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
 const xspRequestData = require("../requestData/xspRequestData");
@@ -1032,14 +1032,23 @@ class StarMFController {
   // Fetch 2FA Link Service
 
   get2FAUccNom = async (req, res) => {
-    let reqObj = fetch2FALinkRequestData.get2FAUccNom;
-    return this.handleFetch2FALinkRequest("get2FAUccNom", reqObj, res);
+    return this.fetch2FAUcc("get2FAUccNom", "UCC_NOM", req, res);
   };
 
   get2FAUccElog = async (req, res) => {
-    let reqObj = fetch2FALinkRequestData.get2FAUccElog;
-    return this.handleFetch2FALinkRequest("get2FAUccElog", reqObj, res);
+    return this.fetch2FAUcc("get2FAUccElog", "UCC_ELOG", req, res);
   };
+
+  async fetch2FAUcc(serviceMethod, event, req, res) {
+    const ucc = req.ucc || investorUcc(req.investor);
+    if (!ucc) return res.status(400).json({ status: "error", message: "UCC is required" });
+    const reqObj = twoFaUccPayload(event, {
+      ucc,
+      info: await this.lookupUcc(ucc),
+      memberCode: this.memberCode,
+    });
+    return this.handleFetch2FALinkRequest(serviceMethod, reqObj, res);
+  }
 
   get2FAVerifyMandateCancel = async (req, res) => {
     let reqObj = fetch2FALinkRequestData.get2FAVerifyMandateCancel;
