@@ -684,7 +684,11 @@ class StarMFController {
         message: "A valid 10-digit Indian mobile number is required. Update it in your profile before investing.",
       });
     }
-    const normalized = normalizeOrder(parsed.order, { ucc, memberCode: this.memberCode, mobile });
+    const dp = parsed.order.depository_acct?.dp_id ? parsed.order.depository_acct : await this.lookupDepository(ucc);
+    const normalized = normalizeOrder(
+      { ...parsed.order, depository_acct: dp || {} },
+      { ucc, memberCode: this.memberCode, mobile }
+    );
     const reqObj = { data: { orders: [normalized] } };
     return this.handleTrxnRequest("purchaseNewOrder", reqObj, res);
   };
@@ -772,6 +776,33 @@ class StarMFController {
     let reqObj = req.body && Object.keys(req.body).length ? req.body : paymentRequestData.getMisDetails;
     this.handlePaymentRequest("getPaymentMisDetails", reqObj, res);
   };
+
+  // ponytail: holding mode ka source of truth BSE hai, hamari DB nahi. Demat UCC par
+  // order bina depository_acct ke reject hota hai (msgid 1522) aur "P" bhejna bhi
+  // not_allowed hai. UCC shayad hi badalta hai, is liye process-level cache — stale
+  // lage to container restart kaafi hai, TTL ki zaroorat tab hai jab DP details badlein.
+  _depositoryCache = {};
+  async lookupDepository(ucc) {
+    if (!ucc) return null;
+    if (this._depositoryCache[ucc] !== undefined) return this._depositoryCache[ucc];
+    let dp = null;
+    try {
+      if (!this.accessToken) await this.loginFunc();
+      const { data } = await axios.post(
+        `${this.bseDemoUrl}/v2/get_ucc`,
+        { data: { member_code: { member_id: this.memberCode }, investor: { client_code: ucc } } },
+        { headers: { Authorization: `Bearer ${this.accessToken}` } }
+      );
+      const acct = (data?.data?.depository || []).find((d) => d?.dp_id && d?.client_id);
+      if (acct) {
+        dp = { depository: acct.depository_code, dp_id: acct.dp_id, client_id: acct.client_id };
+      }
+    } catch (error) {
+      console.error("UCC depository lookup failed:", bseMessage(error));
+    }
+    this._depositoryCache[ucc] = dp;
+    return dp;
+  }
 
   async lookupScheme(code) {
     if (!code) return null;

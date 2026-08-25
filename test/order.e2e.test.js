@@ -35,6 +35,9 @@ before(async () => {
   controller.masterDataService.getSchemeMasterList = async () => ({
     data: { count: 1, lists: [{ scheme_name: "SBI ESG GROWTH", scheme_isin: "INF200K01214", scheme_bse_code: "007G", min_lumpsum_amount: 5000, min_redemption_amount: 1000, purchase_allowed: "Y", scheme_status: "active" }] },
   });
+  // Demat details BSE holds against the UCC — stubbed like every other BSE call here,
+  // otherwise the order path reaches out to the real gateway.
+  controller.lookupDepository = async () => ({ depository: "CDSL", dp_id: "12345678", client_id: "12345678" });
   controller.trxnService.purchaseNewOrder = async (_t, payload) => {
     sent = payload;
     return bseResponse;
@@ -111,6 +114,8 @@ describe("order path end to end", () => {
     assert.equal(order.member, "91010");
     assert.equal(order.cur, "INR");
     assert.ok(order.mem_ord_ref_id, "carries a member order reference");
+    assert.equal(order.phys_or_demat, "D", "BSE refuses P for a demat-only UCC");
+    assert.deepEqual(order.depository_acct, { depository: "CDSL", dp_id: "12345678", client_id: "12345678" });
   });
 
   it("overrides a spoofed UCC with the authenticated investor's", async () => {
@@ -182,3 +187,4 @@ describe("order path end to end", () => {
     bseResponse = { status: "success", data: { items: [{ id: "ORD1" }] } };
   });
 });
+
