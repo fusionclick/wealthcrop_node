@@ -67,6 +67,9 @@ async function getCatalogue(controller, q = {}) {
     // wo mil bhi rahe hain ya nahi, ye batata hai. `isTransactable` chup chaap sach maan
     // leta hai jab flag na mile, is liye ye dikhna zaroori hai.
     fields: Object.keys(rows[0] || {}),
+    // ponytail: sirf single-scheme lookup par ek raw row — is se pata chalta hai BSE
+    // ne kya bheja jab koi scheme order par reject hoti hai. Filter pakka hote hi hata dena.
+    sample: (q.scheme_code || q.isin) && rows[0] ? rows[0] : null,
   };
 }
 

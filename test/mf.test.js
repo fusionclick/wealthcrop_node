@@ -318,6 +318,24 @@ describe("error message is always a string", () => {
   });
 });
 
+describe("scheme transactability", () => {
+  it("drops schemes BSE marks inactive or closed", () => {
+    // Real BSE master field names — the old code read purchase_allowed/scheme_status,
+    // which BSE never sends, so every scheme passed and closed ones failed at order time.
+    assert.equal(isTransactable({ is_active: "N" }), false);
+    assert.equal(isTransactable({ amc_active_flag: "N" }), false);
+    assert.equal(isTransactable({ scheme_offer_status: "Close" }), false);
+    assert.equal(isTransactable({ lumpsum: { allowed: "N" } }), false);
+  });
+
+  it("keeps a scheme when BSE says nothing", () => {
+    // Only an explicit no excludes — a guessed-wrong field name must never empty the list.
+    assert.equal(isTransactable({}), true);
+    assert.equal(isTransactable({ is_active: "Y", scheme_offer_status: "Open" }), true);
+    assert.equal(isTransactable({ lumpsum: { min_amount: 5000 } }), true);
+  });
+});
+
 describe("payment page proxy", () => {
   const base = "https://starmfv2demo.bseindia.com";
   const prefix = "/api/bse/pg";

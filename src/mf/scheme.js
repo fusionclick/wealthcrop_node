@@ -9,9 +9,26 @@ function flag(v) {
   return null;
 }
 
+// BSE master ke asli field naam: is_active, amc_active_flag, scheme_offer_status,
+// lumpsum, systematic. Purana code purchase_allowed/scheme_status dhoondta tha jo BSE
+// bhejta hi nahi — is liye har scheme "allowed" nikalti thi aur band schemes order par
+// record_not_found de deti thin.
+const CLOSED_OFFER = /^(close|closed|suspend|suspended|inactive|matured|wound)/i;
+
+// ponytail: `lumpsum` object ki shape confirm nahi — sirf saaf inkar par rok lagti hai,
+// warna filter poori list kha jayega. Shape maloom hote hi seedha field padh lena.
+function lumpsumBlocked(l) {
+  if (l == null) return false;
+  if (typeof l !== "object") return flag(l) === false;
+  return flag(l.allowed ?? l.purchase_allowed ?? l.purchase ?? l.is_allowed) === false;
+}
+
 function isTransactable(scheme = {}) {
-  if (flag(scheme.scheme_status || scheme.status) === false) return false;
-  if (flag(scheme.purchase_allowed ?? scheme.purchase_allow ?? scheme.txn_allowed ?? scheme.transaction_allowed) === false) {
+  if (flag(scheme.is_active ?? scheme.scheme_status ?? scheme.status) === false) return false;
+  if (flag(scheme.amc_active_flag) === false) return false;
+  if (CLOSED_OFFER.test(String(scheme.scheme_offer_status || "").trim())) return false;
+  if (lumpsumBlocked(scheme.lumpsum)) return false;
+  if (flag(scheme.purchase_allowed ?? scheme.purchase_allow ?? scheme.txn_allowed) === false) {
     return false;
   }
   return true;
@@ -73,7 +90,8 @@ function mapScheme(scheme = {}, index = 0) {
     minRedeem: minRedeem != null && minRedeem !== "" ? Number(minRedeem) : null,
     purchase_allowed: scheme.purchase_allowed ?? scheme.purchase_allow ?? null,
     sip_allowed: scheme.sip_allowed ?? scheme.sip_flag ?? null,
-    scheme_status: scheme.scheme_status || scheme.status || null,
+    scheme_status: scheme.is_active ?? scheme.scheme_status ?? scheme.status ?? null,
+    scheme_offer_status: clean(scheme.scheme_offer_status) || null,
     scheme_plan: clean(scheme.scheme_plan) || null,
     scheme_option: clean(scheme.scheme_option) || null,
     scheme_amc_name: clean(scheme.scheme_amc_name || scheme.amc_name) || null,
