@@ -471,6 +471,38 @@ describe("physical vs demat", () => {
   });
 });
 
+describe("purchase window", () => {
+  const { windowOpen } = require("../src/mf/scheme");
+  const scheme = (start, end) => ({
+    lumpsum: [
+      {
+        scheme_transaction_type: "Purchase",
+        scheme_transaction_effective_start_date: start,
+        scheme_transaction_effective_end_date: end,
+      },
+    ],
+  });
+  const now = Date.parse("2026-08-26T00:00:00");
+
+  it("drops a scheme whose window has closed", () => {
+    // FR011-DP closed on 2025-06-20 and still sat in the catalogue.
+    assert.equal(windowOpen(scheme("2016-04-06T00:00:00", "2025-06-20T14:58:13.467"), "Purchase", now), false);
+  });
+
+  it("keeps a scheme whose window is open", () => {
+    assert.equal(windowOpen(scheme("2010-07-19T00:00:00", "2037-12-31T00:00:00"), "Purchase", now), true);
+  });
+
+  it("drops a scheme that has not opened yet", () => {
+    assert.equal(windowOpen(scheme("2030-01-01T00:00:00", "2037-12-31T00:00:00"), "Purchase", now), false);
+  });
+
+  it("keeps a scheme when BSE gives no window", () => {
+    assert.equal(windowOpen({}, "Purchase", now), true);
+    assert.equal(windowOpen(scheme("", ""), "Purchase", now), true);
+  });
+});
+
 describe("catalogue hides what cannot be bought", () => {
   const { allowedModes } = require("../src/mf/scheme");
   const buyable = (row) => allowedModes(row)?.demat !== false;

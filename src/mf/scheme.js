@@ -23,11 +23,28 @@ function lumpsumBlocked(l) {
   return flag(l.allowed ?? l.purchase_allowed ?? l.purchase ?? l.is_allowed) === false;
 }
 
+// BSE har transaction type ka window deta hai. Chalti hui schemes par end date
+// 2037-12-31 hoti hai; mare hue rows par guzri hui (FR011-DP: 2025-06-20). Window
+// band ho to order bhi reject hoga, is liye check yahin — list aur order dono isi
+// se guzarte hain.
+function windowOpen(scheme, txnType = "Purchase", now = Date.now()) {
+  const rows = Array.isArray(scheme?.lumpsum) ? scheme.lumpsum : [];
+  const row = rows.find(
+    (r) => String(r?.scheme_transaction_type || "").toLowerCase() === txnType.toLowerCase()
+  );
+  if (!row) return true;
+  const start = Date.parse(row.scheme_transaction_effective_start_date);
+  if (Number.isFinite(start) && now < start) return false;
+  const end = Date.parse(row.scheme_transaction_effective_end_date);
+  return Number.isFinite(end) ? now <= end : true;
+}
+
 function isTransactable(scheme = {}) {
   if (flag(scheme.is_active ?? scheme.scheme_status ?? scheme.status) === false) return false;
   if (flag(scheme.amc_active_flag) === false) return false;
   if (CLOSED_OFFER.test(String(scheme.scheme_offer_status || "").trim())) return false;
   if (lumpsumBlocked(scheme.lumpsum)) return false;
+  if (!windowOpen(scheme)) return false;
   if (flag(scheme.purchase_allowed ?? scheme.purchase_allow ?? scheme.txn_allowed) === false) {
     return false;
   }
@@ -377,6 +394,7 @@ function setListCache(key, data) {
 module.exports = {
   flag,
   isTransactable,
+  windowOpen,
   allowedModes,
   mapScheme,
   pickScheme,
