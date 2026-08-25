@@ -296,11 +296,11 @@ describe("bse messages[] errors", () => {
   it("sends physical unless real DP details are present", () => {
     const base = { type: "p", amount: 5000, phys_or_demat: "d" };
     const opts = { ucc: "USRWC003", memberCode: "91010", mobile: "8617029131" };
-    assert.equal(normalizeOrder(base, opts).phys_or_demat, "p", "no DP details -> physical");
-    assert.equal(normalizeOrder({ ...base, depository_acct: { dp_id: "", client_id: "" } }, opts).phys_or_demat, "p");
+    assert.equal(normalizeOrder(base, opts).phys_or_demat, "P", "no DP details -> physical");
+    assert.equal(normalizeOrder({ ...base, depository_acct: { dp_id: "", client_id: "" } }, opts).phys_or_demat, "P");
     assert.equal(
       normalizeOrder({ ...base, depository_acct: { depository: "CDSL", dp_id: "12345678", client_id: "87654321" } }, opts).phys_or_demat,
-      "d"
+      "D"
     );
   });
 });

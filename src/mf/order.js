@@ -118,9 +118,9 @@ function normalizeOrder(order, { ucc, memberCode, mobile }) {
   const holder = Array.isArray(order.holder)
     ? order.holder.map((h) => ({ ...h, mobnum: normalizeMobile(h?.mobnum) || mobnum }))
     : order.holder;
-  // ponytail: demat order par BSE depository_acct {depository, dp_id, client_id} maangta hai
-  // (msgid 1522). Wo details kahin store nahi hotin, is liye physical bhejo — DP data
-  // aane par ye khud "d" par chala jayega.
+  // ponytail: BSE uppercase "P"/"D" leta hai — orderRequestData.purchaseNewOrder dekho.
+  // Demat par depository_acct {depository, dp_id, client_id} lazmi hai (msgid 1522),
+  // wo details kahin store nahi hotin; DP data aate hi ye khud "D" par chala jayega.
   const dp = order.depository_acct;
   const hasDp = !!(dp && String(dp.dp_id || "").trim() && String(dp.client_id || "").trim());
   return {
@@ -133,7 +133,8 @@ function normalizeOrder(order, { ucc, memberCode, mobile }) {
     cur: order.cur || "INR",
     mobnum,
     holder,
-    phys_or_demat: hasDp ? "d" : "p",
+    phys_or_demat: hasDp ? "D" : "P",
+    depository_acct: hasDp ? dp : {},
   };
 }
 

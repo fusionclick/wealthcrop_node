@@ -718,14 +718,11 @@ class StarMFController {
           fields: ["ALL"],
           start: 0,
           length: 100,
-          // ponytail: order_list dono maangta hai — member_code (msgid 1522) aur
-          // open_close (msgid 522). "C" ko BSE ne invalid kaha tha; "O" open orders hai.
-          filter_param: {
-            ucc: [ucc],
-            status: ["ALLOTTED", "ACCEPTED", "PAID"],
-            member_code: this.memberCode,
-            open_close: "O",
-          },
+          // ponytail: shapes orderRequestData/uccRequestData se — member_code data level par
+          // object hai (filter_param mein string nahi), aur open_close lowercase "o" hai.
+          // Uppercase O/C/ALL sab msgid 1579 "invalid" dete hain, probe kar ke dekh liya.
+          member_code: { member_id: this.memberCode },
+          filter_param: { ucc: [ucc], status: ["ALLOTTED", "ACCEPTED", "PAID"], open_close: "o" },
         },
       };
       const result = await new Promise((resolve, reject) => {
