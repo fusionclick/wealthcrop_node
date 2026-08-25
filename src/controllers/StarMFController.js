@@ -17,9 +17,6 @@ const fetch2FALinkRequestData = require("../requestData/fetch2FALinkRequestData"
 const mandateRequestData = require("../requestData/mandateRequestData");
 const navRequestData = require("../requestData/navRequestData");
 
-// ponytail: SDK ka _postRequest error ko nigal kar body return kar deta hai, throw nahi karta.
-// Is liye sirf explicit failure marker par error banao — success/absent status ko haath mat lagao,
-// warna jo endpoints abhi chal rahe hain wo tut jayenge.
 // ponytail: BSE galtiyan `messages[]` mein bhejta hai — {msgid, errcode, field, vals}.
 // `field` par order ka ref id prefix hota hai ("726215.depository_acct"), wo hata do.
 const bseMessages = (r) =>
@@ -27,6 +24,9 @@ const bseMessages = (r) =>
     .map((m) => `${String(m?.field || "field").split(".").pop()} is ${m?.errcode || "invalid"}`)
     .join("; ");
 
+// ponytail: SDK ka _postRequest error ko nigal kar body return kar deta hai, throw nahi karta.
+// Is liye sirf explicit failure marker par error banao — success/absent status ko haath mat lagao,
+// warna jo endpoints abhi chal rahe hain wo tut jayenge.
 const bseFailure = (r) => {
   const s = String(r?.status ?? "").toLowerCase();
   const items = Array.isArray(r?.data?.items) ? r.data.items : [];
@@ -1271,7 +1271,8 @@ class StarMFController {
 
       return res.status(500).json({
         status: "error",
-        message: error.response?.data || error.message,
+        message: bseMessage(error),
+        detail: error.response?.data || null,
       });
     }
   };
@@ -1306,7 +1307,8 @@ class StarMFController {
 
       return res.status(500).json({
         status: "error",
-        message: error.response?.data || error.message,
+        message: bseMessage(error),
+        detail: error.response?.data || null,
       });
     }
   }
@@ -1339,7 +1341,8 @@ class StarMFController {
 
       return res.status(500).json({
         status: "error",
-        message: error.response?.data || error.message,
+        message: bseMessage(error),
+        detail: error.response?.data || null,
       });
     }
   };

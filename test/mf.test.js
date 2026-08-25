@@ -304,3 +304,15 @@ describe("bse messages[] errors", () => {
     );
   });
 });
+
+describe("error message is always a string", () => {
+  const { bseMessage } = require("../src/controllers/StarMFController");
+  it("never hands the UI an object to render", () => {
+    // React error #31: the payment handler used to put error.response.data
+    // straight into `message`, and the UI rendered it as a child.
+    const err = { response: { data: { status: "error", data: {}, messages: [{ errcode: "required", field: "amount" }] } } };
+    assert.equal(typeof bseMessage(err), "string");
+    assert.equal(typeof bseMessage({ response: { data: "plain text body" } }), "string");
+    assert.equal(typeof bseMessage({}), "string");
+  });
+});
