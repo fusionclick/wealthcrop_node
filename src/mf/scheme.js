@@ -65,6 +65,21 @@ function categoryFromName(name = "") {
   return hit ? { category: hit[1], sub: hit[2] } : { category: "", sub: "" };
 }
 
+// BSE har scheme ke liye batata hai ke wo Demat leta hai ya Physical, aur ye
+// transaction type ke hisab se alag hota hai — `lumpsum[]` mein Purchase/Redemption/
+// Switch ki apni apni entry hoti hai. Kuch schemes (jaise Franklin Pension Plan) sirf
+// Physical hain, aur unhein "D" bhejne par BSE msgid 1588 "PhysOrDemat not_allowed" deta hai.
+function allowedModes(scheme, txnType = "Purchase") {
+  const rows = Array.isArray(scheme?.lumpsum) ? scheme.lumpsum : [];
+  const row = rows.find(
+    (r) => String(r?.scheme_transaction_type || "").toLowerCase() === txnType.toLowerCase()
+  );
+  const raw = row?.scheme_transaction_mode_allowed || scheme?.scheme_transaction_mode_allowed;
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const modes = raw.map((m) => String(m?.scheme_transaction_mode_demat_physical_allowed || "").toLowerCase());
+  return { demat: modes.includes("demat"), physical: modes.includes("physical") };
+}
+
 function mapScheme(scheme = {}, index = 0) {
   const name = scheme.name || scheme.scheme_name || "";
   const isin = scheme.scheme_isin || scheme.isin || "";
@@ -92,6 +107,8 @@ function mapScheme(scheme = {}, index = 0) {
     sip_allowed: scheme.sip_allowed ?? scheme.sip_flag ?? null,
     scheme_status: scheme.is_active ?? scheme.scheme_status ?? scheme.status ?? null,
     scheme_offer_status: clean(scheme.scheme_offer_status) || null,
+    // Physical-only schemes ka Invest form kholna bekaar hai — UCC demat par hai.
+    holding_modes: allowedModes(scheme),
     scheme_plan: clean(scheme.scheme_plan) || null,
     scheme_option: clean(scheme.scheme_option) || null,
     scheme_amc_name: clean(scheme.scheme_amc_name || scheme.amc_name) || null,
@@ -360,6 +377,7 @@ function setListCache(key, data) {
 module.exports = {
   flag,
   isTransactable,
+  allowedModes,
   mapScheme,
   pickScheme,
   navLookup,

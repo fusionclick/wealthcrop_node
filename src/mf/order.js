@@ -1,4 +1,4 @@
-const { isTransactable } = require("./scheme");
+const { isTransactable, allowedModes } = require("./scheme");
 
 const ALLOWED_TYPES = new Set(["p", "r"]);
 
@@ -109,21 +109,6 @@ function checkSchemeLimits(order, scheme) {
     }
   }
   return { ok: true };
-}
-
-// BSE har scheme ke liye batata hai ke wo Demat leta hai ya Physical, aur ye
-// transaction type ke hisab se alag hota hai — `lumpsum[]` mein Purchase/Redemption/
-// Switch ki apni apni entry hoti hai. Kuch schemes (jaise Franklin Pension Plan) sirf
-// Physical hain, aur unhein "D" bhejne par BSE msgid 1588 "PhysOrDemat not_allowed" deta hai.
-function allowedModes(scheme, txnType = "Purchase") {
-  const rows = Array.isArray(scheme?.lumpsum) ? scheme.lumpsum : [];
-  const row = rows.find(
-    (r) => String(r?.scheme_transaction_type || "").toLowerCase() === txnType.toLowerCase()
-  );
-  const raw = row?.scheme_transaction_mode_allowed || scheme?.scheme_transaction_mode_allowed;
-  if (!Array.isArray(raw) || !raw.length) return null;
-  const modes = raw.map((m) => String(m?.scheme_transaction_mode_demat_physical_allowed || "").toLowerCase());
-  return { demat: modes.includes("demat"), physical: modes.includes("physical") };
 }
 
 // get_ucc ka jawab batata hai ke UCC physical rakh sakta hai ya demat, aur wo mode
