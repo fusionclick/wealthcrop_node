@@ -223,3 +223,13 @@ describe("orders", () => {
     assert.equal(bound.data.investor.ucc, "USRWC003");
   });
 });
+
+describe("bse error message", () => {
+  it("prefers BSE's own reason over the axios message", () => {
+    const { bseMessage } = require("../src/controllers/StarMFController");
+    assert.equal(bseMessage({ response: { data: { message: "UCC not registered" } }, message: "Request failed with status code 500" }), "UCC not registered");
+    assert.equal(bseMessage({ response: { data: { errors: [{ message: "scheme not allowed" }] } } }), "scheme not allowed");
+    assert.equal(bseMessage({ message: "socket hang up" }), "socket hang up");
+    assert.equal(bseMessage({}), "BSE request failed");
+  });
+});

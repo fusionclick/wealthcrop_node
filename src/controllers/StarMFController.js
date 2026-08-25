@@ -17,6 +17,15 @@ const fetch2FALinkRequestData = require("../requestData/fetch2FALinkRequestData"
 const mandateRequestData = require("../requestData/mandateRequestData");
 const navRequestData = require("../requestData/navRequestData");
 
+// ponytail: BSE ka asli reason nikalta hai — UI aur logs dono `message` padhte hain
+const bseMessage = (error) => {
+  const d = error?.response?.data;
+  return String(
+    d?.message || d?.data?.message || d?.errors?.[0]?.message ||
+    error?.message || error?.code || "BSE request failed"
+  );
+};
+
 class StarMFController {
   constructor() {
     this.loginService = new StarMFService.BseLoginService({
@@ -408,12 +417,13 @@ class StarMFController {
           return res.json(response);
         } catch (retryError) {
           console.error(`Error in ${serviceMethod} after token refresh:`, retryError);
-          return res.status(500).json({ error: "Internal Server Error after token refresh", details: retryError.message });
+          // ponytail: message field bhi chahiye — UI isi ko padhta hai, details ko nahi
+          return res.status(500).json({ status: "error", error: "Internal Server Error after token refresh", message: bseMessage(retryError), details: retryError.message });
         }
       }
       
       console.error(`Error in ${serviceMethod}:`, error);
-      return res.status(500).json({ error: "Internal Server Error", details: error.message });
+      return res.status(500).json({ status: "error", error: "Internal Server Error", message: bseMessage(error), details: error.message });
     }
   }
 
@@ -1300,3 +1310,4 @@ class StarMFController {
 
 // Export an instance of the class
 module.exports = new StarMFController();
+module.exports.bseMessage = bseMessage;
