@@ -299,7 +299,7 @@ describe("bse messages[] errors", () => {
     assert.equal(normalizeOrder(base, opts).phys_or_demat, "P", "no DP details -> physical");
     assert.equal(normalizeOrder({ ...base, depository_acct: { dp_id: "", client_id: "" } }, opts).phys_or_demat, "P");
     assert.equal(
-      normalizeOrder({ ...base, depository_acct: { depository: "CDSL", dp_id: "12345678", client_id: "87654321" } }, opts).phys_or_demat,
+      normalizeOrder({ ...base, depository_acct: { depository_code: "CDSL", dp_id: "12345678", client_id: "87654321" } }, opts).phys_or_demat,
       "D"
     );
   });

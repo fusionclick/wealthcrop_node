@@ -37,7 +37,7 @@ before(async () => {
   });
   // Demat details BSE holds against the UCC — stubbed like every other BSE call here,
   // otherwise the order path reaches out to the real gateway.
-  controller.lookupDepository = async () => ({ depository: "CDSL", dp_id: "12345678", client_id: "12345678" });
+  controller.lookupDepository = async () => ({ depository_code: "CDSL", dp_id: "12345678", client_id: "12345678" });
   controller.trxnService.purchaseNewOrder = async (_t, payload) => {
     sent = payload;
     return bseResponse;
@@ -115,7 +115,7 @@ describe("order path end to end", () => {
     assert.equal(order.cur, "INR");
     assert.ok(order.mem_ord_ref_id, "carries a member order reference");
     assert.equal(order.phys_or_demat, "D", "BSE refuses P for a demat-only UCC");
-    assert.deepEqual(order.depository_acct, { depository: "CDSL", dp_id: "12345678", client_id: "12345678" });
+    assert.deepEqual(order.depository_acct, { depository_code: "CDSL", dp_id: "12345678", client_id: "12345678" });
   });
 
   it("overrides a spoofed UCC with the authenticated investor's", async () => {
