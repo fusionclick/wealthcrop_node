@@ -6,7 +6,7 @@ const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChar
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
 const { getCatalogue, query } = require("../mf/catalogue");
-const { bindUcc, validateOrder, checkSchemeLimits, normalizeOrder, investorUcc, investorMobile, normalizeMobile } = require("../mf/order");
+const { bindUcc, validateOrder, checkSchemeLimits, allowedModes, normalizeOrder, investorUcc, investorMobile, normalizeMobile } = require("../mf/order");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
 const xspRequestData = require("../requestData/xspRequestData");
@@ -711,7 +711,12 @@ class StarMFController {
         scheme: scheme?.scheme_bse_code || parsed.order.scheme,
         depository_acct: dp || {},
       },
-      { ucc, memberCode: this.memberCode, mobile }
+      {
+        ucc,
+        memberCode: this.memberCode,
+        mobile,
+        modes: allowedModes(scheme, String(parsed.order.type).toLowerCase() === "r" ? "Redemption" : "Purchase"),
+      }
     );
     const reqObj = { data: { orders: [normalized] } };
     return this.handleTrxnRequest("purchaseNewOrder", reqObj, res);

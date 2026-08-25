@@ -336,6 +336,51 @@ describe("scheme transactability", () => {
   });
 });
 
+describe("physical vs demat", () => {
+  const { allowedModes } = require("../src/mf/order");
+  const scheme = (mode) => ({
+    lumpsum: [
+      {
+        scheme_transaction_type: "Purchase",
+        scheme_transaction_mode_allowed: [{ scheme_transaction_mode_demat_physical_allowed: mode }],
+      },
+      {
+        scheme_transaction_type: "Redemption",
+        scheme_transaction_mode_allowed: [{ scheme_transaction_mode_demat_physical_allowed: "Demat" }],
+      },
+    ],
+  });
+  const base = {
+    type: "p",
+    scheme: "FR011-DP",
+    amount: 5000,
+    depository_acct: { depository: "C", dp_id: "12345678", client_id: "87654321" },
+  };
+  const opts = { ucc: "USRWC003", memberCode: "91010", mobile: "8617029131" };
+
+  it("goes physical when the scheme refuses demat", () => {
+    // BSE msgid 1588: Franklin Pension Plan is Physical-only, and we sent "d".
+    const n = normalizeOrder(base, { ...opts, modes: allowedModes(scheme("Physical")) });
+    assert.equal(n.phys_or_demat, "P");
+    assert.deepEqual(n.depository_acct, {}, "no DP block on a physical order");
+  });
+
+  it("stays demat when the scheme allows it", () => {
+    const n = normalizeOrder(base, { ...opts, modes: allowedModes(scheme("Demat")) });
+    assert.equal(n.phys_or_demat, "D");
+    assert.equal(n.depository_acct.dp_id, "12345678");
+  });
+
+  it("reads the mode for the transaction type being placed", () => {
+    assert.deepEqual(allowedModes(scheme("Physical"), "Redemption"), { demat: true, physical: false });
+  });
+
+  it("keeps the old behaviour when BSE says nothing", () => {
+    assert.equal(allowedModes({}), null);
+    assert.equal(normalizeOrder(base, { ...opts, modes: null }).phys_or_demat, "D");
+  });
+});
+
 describe("scheme code resolution", () => {
   // BSE keeps a dead row on the old code (011-DP) beside the live one (FR011-DP).
   // Links minted before the filter landed still carry the dead code.

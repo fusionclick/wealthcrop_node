@@ -111,7 +111,22 @@ function checkSchemeLimits(order, scheme) {
   return { ok: true };
 }
 
-function normalizeOrder(order, { ucc, memberCode, mobile }) {
+// BSE har scheme ke liye batata hai ke wo Demat leta hai ya Physical, aur ye
+// transaction type ke hisab se alag hota hai — `lumpsum[]` mein Purchase/Redemption/
+// Switch ki apni apni entry hoti hai. Kuch schemes (jaise Franklin Pension Plan) sirf
+// Physical hain, aur unhein "D" bhejne par BSE msgid 1588 "PhysOrDemat not_allowed" deta hai.
+function allowedModes(scheme, txnType = "Purchase") {
+  const rows = Array.isArray(scheme?.lumpsum) ? scheme.lumpsum : [];
+  const row = rows.find(
+    (r) => String(r?.scheme_transaction_type || "").toLowerCase() === txnType.toLowerCase()
+  );
+  const raw = row?.scheme_transaction_mode_allowed || scheme?.scheme_transaction_mode_allowed;
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const modes = raw.map((m) => String(m?.scheme_transaction_mode_demat_physical_allowed || "").toLowerCase());
+  return { demat: modes.includes("demat"), physical: modes.includes("physical") };
+}
+
+function normalizeOrder(order, { ucc, memberCode, mobile, modes }) {
   const type = String(order.type || "").toLowerCase();
   const allUnits = !!order.all_units;
   const mobnum = mobile || normalizeMobile(order.mobnum);
@@ -123,6 +138,8 @@ function normalizeOrder(order, { ucc, memberCode, mobile }) {
   // wo details kahin store nahi hotin; DP data aate hi ye khud "D" par chala jayega.
   const dp = order.depository_acct;
   const hasDp = !!(dp && String(dp.dp_id || "").trim() && String(dp.client_id || "").trim());
+  // modes null = BSE ne kuch nahi bataya, to purana bartao: DP hai to demat.
+  const demat = hasDp && (!modes || modes.demat);
   return {
     ...order,
     type,
@@ -133,8 +150,8 @@ function normalizeOrder(order, { ucc, memberCode, mobile }) {
     cur: order.cur || "INR",
     mobnum,
     holder,
-    phys_or_demat: hasDp ? "D" : "P",
-    depository_acct: hasDp ? dp : {},
+    phys_or_demat: demat ? "D" : "P",
+    depository_acct: demat ? dp : {},
   };
 }
 
@@ -147,5 +164,6 @@ module.exports = {
   bindUcc,
   validateOrder,
   checkSchemeLimits,
+  allowedModes,
   normalizeOrder,
 };
