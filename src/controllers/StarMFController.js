@@ -244,7 +244,12 @@ class StarMFController {
                   {
                       "holder_rank": "1",
                       "occ_code": "02",
-                      "auth_mode": "M",
+                      // ponytail: "M" (manual) ka matlab hai investor AOF form jama karay,
+                      // jiska app mein koi upload flow nahi — UCC hamesha
+                      // PENDING_VERIFICATION par atka reh jata tha aur koi order nahi lagta.
+                      // "E" par eLog link banta hai (get2FAUccElog), investor e-sign kar
+                      // leta hai. AOF upload ban jaye to yahan wapas "M" chal sakta hai.
+                      "auth_mode": "E",
                       "is_pan_exempt": false,
                       "pan_exempt_category": "",
                       "identifier": [
