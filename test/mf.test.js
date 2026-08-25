@@ -319,15 +319,33 @@ describe("error message is always a string", () => {
 });
 
 describe("payment page proxy", () => {
-  const rewrite = (s, base, prefix) => s.split(`${base}/api/`).join(`${prefix}/`);
+  const base = "https://starmfv2demo.bseindia.com";
+  const prefix = "/api/bse/pg";
+  // proxify: host badlo, path chhoro — proxyPaymentPage suffix ko wapas baseUrl par lagata hai.
+  const proxify = (s) => String(s).split(base).join(prefix);
+  const upstream = (url) => `${base}/${url.slice(prefix.length + 1)}`;
+
   it("points BSE's own links back through the proxy", () => {
-    const base = "https://starmfv2demo.bseindia.com";
     const body = JSON.stringify({ data: { exch_pg_page_link: `${base}/api/s4/pg_view_object/TOK123` } });
-    const out = JSON.parse(rewrite(body, base, "/api/bse/pg"));
-    assert.equal(out.data.exch_pg_page_link, "/api/bse/pg/s4/pg_view_object/TOK123");
+    const out = JSON.parse(proxify(body));
+    assert.equal(out.data.exch_pg_page_link, "/api/bse/pg/api/s4/pg_view_object/TOK123");
+    assert.equal(upstream(out.data.exch_pg_page_link), `${base}/api/s4/pg_view_object/TOK123`, "round-trips");
   });
+
+  it("rewrites hosts that the page concatenates at runtime", () => {
+    // This was the bug: the page holds the bare origin in a variable and builds
+    // `origin + "/api/get_ucc_details"` in JS, so `${base}/api/` never appears literally.
+    const js = `var API = "${base}"; fetch(API + "/api/get_ucc_details")`;
+    assert.ok(!proxify(js).includes("bseindia.com"), "no absolute BSE URL survives");
+    assert.equal(upstream(`${prefix}/api/get_ucc_details`), `${base}/api/get_ucc_details`);
+  });
+
+  it("keeps non-/api paths intact", () => {
+    assert.equal(upstream(proxify(`${base}/static/pg.css`)), `${base}/static/pg.css`);
+  });
+
   it("leaves other hosts alone", () => {
     const html = '<a href="https://bank.example/pay">pay</a>';
-    assert.equal(rewrite(html, "https://starmfv2demo.bseindia.com", "/api/bse/pg"), html);
+    assert.equal(proxify(html), html);
   });
 });
