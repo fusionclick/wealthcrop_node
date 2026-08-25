@@ -718,10 +718,14 @@ class StarMFController {
           fields: ["ALL"],
           start: 0,
           length: 100,
-          // ponytail: open_close BSE ka required field hai (msgid 522) — khali bhejne par
-          // poora order_list reject hota tha. "C" = settled orders, jo holdings ke liye chahiye.
-          // Agar pending orders bhi chahiye to yahan "O" ke saath doosri call lagegi.
-          filter_param: { ucc: [ucc], status: ["ALLOTTED", "ACCEPTED", "PAID"], open_close: "C" },
+          // ponytail: order_list dono maangta hai — member_code (msgid 1522) aur
+          // open_close (msgid 522). "C" ko BSE ne invalid kaha tha; "O" open orders hai.
+          filter_param: {
+            ucc: [ucc],
+            status: ["ALLOTTED", "ACCEPTED", "PAID"],
+            member_code: this.memberCode,
+            open_close: "O",
+          },
         },
       };
       const result = await new Promise((resolve, reject) => {
