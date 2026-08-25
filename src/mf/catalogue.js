@@ -42,14 +42,6 @@ async function getCatalogue(controller, q = {}) {
 
   const res = await fetchPage(controller, start, fetchLen, search);
   const rows = res?.data?.lists || [];
-  // ponytail: ek dafa asli field naam log karo. `isTransactable` abhi andaze se
-  // purchase_allowed dhoondta hai aur na mile to scheme ko transactable maan leta hai —
-  // isi liye kuch schemes list mein aate hain jinhe BSE order par record_not_found kehta
-  // hai. Naam maloom hote hi filter theek karke ye log hata dena.
-  if (rows[0] && !getCatalogue._loggedFields) {
-    getCatalogue._loggedFields = true;
-    console.log("[BSE] master row fields:", Object.keys(rows[0]).join(","));
-  }
   const amfi = (await getAmfiNavs()).navs;
   const list = [];
   let unpriced = 0;
@@ -71,6 +63,10 @@ async function getCatalogue(controller, q = {}) {
     list: list.slice(0, length),
     total: Number.isFinite(total) ? total : list.length,
     unpriced,
+    // ponytail: BSE ke row mein asli field kaunse hain — mapScheme jo naam dhoondta hai
+    // wo mil bhi rahe hain ya nahi, ye batata hai. `isTransactable` chup chaap sach maan
+    // leta hai jab flag na mile, is liye ye dikhna zaroori hai.
+    fields: Object.keys(rows[0] || {}),
   };
 }
 

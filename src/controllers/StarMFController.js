@@ -863,7 +863,7 @@ class StarMFController {
     if (cached) return res.json(cached);
 
     try {
-      const { list, total: fetched, unpriced } = await getCatalogue(this, q);
+      const { list, total: fetched, unpriced, fields } = await getCatalogue(this, q);
       // Page already comes from BSE; only filter this page (don't re-slice start).
       const { lists } = query(list, { category: q.category, isin: q.isin, scheme_code: q.scheme_code, start: 0, length: q.length });
       const total = fetched || lists.length;
@@ -880,7 +880,7 @@ class StarMFController {
           length: q.length,
           // Every scheme in `lists` is priced; `unpriced` are matured/wound-up
           // schemes dropped from the catalogue, surfaced here for observability.
-          catalogue: { priced: list.length, fetched, unpriced },
+          catalogue: { priced: list.length, fetched, unpriced, fields },
           lists,
         },
       };
