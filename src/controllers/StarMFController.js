@@ -799,10 +799,15 @@ class StarMFController {
       );
       const acct = (data?.data?.depository || []).find((d) => d?.dp_id && d?.client_id);
       if (acct) {
-        // ponytail: key `depository_code` hai, `depository` nahi — add_ucc aur get_ucc
-        // dono yehi bolte hain. SDK ka DepositoryAccount model galat hai, BSE ne us key
-        // ko "invalid" kaha tha.
-        dp = { depository_code: acct.depository_code, dp_id: acct.dp_id, client_id: acct.client_id };
+        // ponytail: key `depository` hai (iske bagair "required" aata hai), lekin value
+        // UCC wala "CDSL" nahi — usay BSE "invalid" kehta hai. StarMF single-letter code
+        // leta hai: CDSL=C, NSDL=N. Aur koi depository hai nahi, is liye do-tarfa map bas.
+        const code = String(acct.depository_code || "").toUpperCase();
+        dp = {
+          depository: code.startsWith("N") ? "N" : "C",
+          dp_id: acct.dp_id,
+          client_id: acct.client_id,
+        };
       }
     } catch (error) {
       console.error("UCC depository lookup failed:", bseMessage(error));
