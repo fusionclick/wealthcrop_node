@@ -1251,6 +1251,18 @@ class StarMFController {
       }
 
       const payload = bindUcc(req.body, req.ucc, this.memberCode);
+      // ponytail: mem_details BSE ke liye lazmi hai aur member code server-side value hai —
+      // frontend ko wo bhejne ki zaroorat nahi. Shape paymentRequestData.getExchPgService se.
+      payload.data = payload.data || {};
+      payload.data.mem_details = {
+        member: this.memberCode,
+        euin: "",
+        euin_flag: false,
+        sub_br_code: "",
+        sub_br_arn: "",
+        partner_id: "",
+        ...(payload.data.mem_details || {}),
+      };
       const response = await axios.post(
         `${this.bseDemoUrl}/get_exchpg_service`,
         payload,
