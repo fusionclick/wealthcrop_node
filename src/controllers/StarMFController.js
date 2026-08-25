@@ -743,17 +743,23 @@ class StarMFController {
       const rows = result?.data?.lists || result?.data?.items || result?.items || [];
       const items = rows.filter((o) => !o?.status || HELD.has(String(o.status).toUpperCase()));
       const holdings = items.map((o) => ({
-        scheme_name: o.scheme_name || o.scheme,
+        // ponytail: BSE ke apne key naam — order_list `src_scheme_name` aur `folio_num`
+        // deta hai. Purane naam pehle padhe ja rahe the, is liye folio hamesha khali
+        // milta tha aur redeem "Folio is missing" par ruk jata.
+        scheme_name: o.src_scheme_name || o.scheme_name || o.scheme,
         scheme_bse_code: o.scheme,
         inv_amo: Number(o.amount || 0),
-        folio: o.folio || "",
+        folio: o.folio_num || o.folio || "",
         units: Number(o.units || 0),
         nav: Number(o.nav || 0),
         status: o.status,
         ret_percentage: 0,
         scheme_category: o.scheme_category || "Mutual Fund",
       }));
-      return res.json({ status: "success", data: { holdings, count: holdings.length } });
+      // ponytail: unpaid orders holding nahi hain, magar UI ko farq batana hai —
+      // "kuch invest hi nahi kiya" aur "payment adhoori hai" ek jaisa nahi dikhna chahiye.
+      const pending = rows.length - items.length;
+      return res.json({ status: "success", data: { holdings, count: holdings.length, pending } });
     } catch (error) {
       return res.status(500).json({ status: "error", message: error.message });
     }
