@@ -1,6 +1,6 @@
 const { isTransactable, allowedModes } = require("./scheme");
 
-const ALLOWED_TYPES = new Set(["p", "r"]);
+const ALLOWED_TYPES = new Set(["p", "r", "sw"]);
 
 function investorUcc(investor) {
   const ucc = String(investor?.kyc?.ucc_code || investor?.kyc?.ucc || "").trim();
@@ -74,7 +74,7 @@ function validateOrder(body) {
   const order = orders[0];
   const type = String(order.type || "").toLowerCase();
   if (!ALLOWED_TYPES.has(type)) {
-    return { ok: false, error: "Order type must be p (purchase) or r (redeem)" };
+    return { ok: false, error: "Order type must be p (purchase), r (redeem) or sw (switch)" };
   }
   if (!String(order.scheme || "").trim()) {
     return { ok: false, error: "Scheme code is required" };
@@ -84,11 +84,15 @@ function validateOrder(body) {
   if (type === "p" && !(amount > 0)) {
     return { ok: false, error: "Purchase amount must be greater than 0" };
   }
-  if (type === "r" && !allUnits && !(amount > 0)) {
-    return { ok: false, error: "Enter a redemption amount or redeem all units" };
+  // Switch bhi redeem hi hai — units ek folio se bahar jaati hain, sirf destination extra hai.
+  if (type !== "p" && !allUnits && !(amount > 0)) {
+    return { ok: false, error: `Enter a ${type === "sw" ? "switch" : "redemption"} amount or select all units` };
   }
-  if (type === "r" && !String(order.folio || "").trim()) {
-    return { ok: false, error: "Folio is required for redemption" };
+  if (type !== "p" && !String(order.folio || "").trim()) {
+    return { ok: false, error: `Folio is required for ${type === "sw" ? "a switch" : "redemption"}` };
+  }
+  if (type === "sw" && !String(order.dest_scheme || "").trim()) {
+    return { ok: false, error: "Destination scheme is required for a switch" };
   }
   return { ok: true, type, order };
 }

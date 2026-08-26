@@ -215,6 +215,15 @@ describe("orders", () => {
     assert.equal(all.ok, true);
   });
 
+  it("validates switch", () => {
+    const sw = (o) => validateOrder({ data: { orders: [{ type: "sw", scheme: "007G", folio: "123", all_units: true, dest_scheme: "008G", ...o }] } });
+    assert.equal(sw({}).ok, true);
+    assert.equal(sw({ dest_scheme: "" }).ok, false);
+    assert.equal(sw({ folio: "" }).ok, false);
+    assert.equal(sw({ all_units: false, amount: 0 }).ok, false);
+    assert.equal(sw({ all_units: false, amount: 500 }).ok, true);
+  });
+
   it("normalizes member and UCC", () => {
     const n = normalizeOrder({ type: "p", scheme: "007G", amount: 5000 }, { ucc: "USRWC003", memberCode: "91010" });
     assert.equal(n.investor.ucc, "USRWC003");

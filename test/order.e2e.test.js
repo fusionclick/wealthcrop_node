@@ -72,6 +72,13 @@ const buy = (over = {}) => ({
 const sell = (over = {}) => ({
   data: { orders: [{ type: "r", scheme: "007G", amount: 2000, folio: "F123", mem_ord_ref_id: "REF2", ...over }] },
 });
+const swap = (over = {}) => ({
+  data: {
+    orders: [
+      { type: "sw", scheme: "007G", dest_scheme: "008G", folio: "F123", all_units: true, mem_ord_ref_id: "REF3", ...over },
+    ],
+  },
+});
 
 describe("order path end to end", () => {
   before(async () => {
@@ -180,6 +187,46 @@ describe("order path end to end", () => {
     r = await post("/purchaseNewOrder", sell({ amount: 10 }));
     assert.equal(r.status, 400);
     assert.match(r.body.message, /Minimum redemption/i);
+  });
+
+  it("places a switch and carries the destination scheme to BSE", async () => {
+    sent = null;
+    const r = await post("/purchaseNewOrder", swap());
+    assert.equal(r.status, 200);
+    assert.equal(r.body.status, "success");
+    const order = sent.data.orders[0];
+    assert.equal(order.type, "sw");
+    assert.equal(order.scheme, "007G", "source scheme");
+    assert.equal(order.dest_scheme, "008G", "destination must survive normalizeOrder");
+    assert.equal(order.folio, "F123");
+    assert.equal(order.all_units, true);
+    assert.equal(order.amount, 0, "all_units switch must not carry an amount");
+    assert.equal(order.investor.ucc, UCC);
+    assert.equal(order.member, "91010");
+    assert.equal(order.phys_or_demat, "D");
+    assert.deepEqual(order.depository_acct, { depository: "C", dp_id: "12345678", client_id: "12345678" });
+  });
+
+  it("places a partial switch by amount", async () => {
+    sent = null;
+    const r = await post("/purchaseNewOrder", swap({ all_units: false, amount: 2000 }));
+    assert.equal(r.status, 200);
+    assert.equal(sent.data.orders[0].amount, 2000);
+  });
+
+  it("rejects malformed switches before BSE", async () => {
+    for (const [payload, why, msg] of [
+      [swap({ dest_scheme: "" }), "no destination", /destination/i],
+      [swap({ folio: "" }), "no folio", /folio/i],
+      [swap({ all_units: false, amount: 0 }), "no amount and not all units", /switch amount/i],
+      [swap({ investor: { ucc: "ATTACKER1" } }), "spoofed ucc", null],
+    ]) {
+      sent = null;
+      const r = await post("/purchaseNewOrder", payload);
+      assert.ok(r.status === 400 || r.status === 403, `should reject: ${why}`);
+      if (msg) assert.match(r.body.message, msg, `message for: ${why}`);
+      assert.equal(sent, null, `must not reach BSE: ${why}`);
+    }
   });
 
   it("surfaces a BSE rejection instead of reporting success", async () => {
