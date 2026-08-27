@@ -10,8 +10,13 @@ async function requireInvestor(req, res, next) {
     return res.status(401).json({ status: "error", message: "Unauthorized", reason: "no_bearer_token" });
   }
   try {
+    const userAgent = String(req.headers["user-agent"] || "").trim();
     const r = await axios.get(configData.investorUrl, {
-      headers: { Authorization: auth, Accept: "application/json" },
+      headers: {
+        Authorization: auth,
+        Accept: "application/json",
+        ...(userAgent ? { "User-Agent": userAgent } : {}),
+      },
       timeout: 10000,
     });
     const investor = r.data?.data;

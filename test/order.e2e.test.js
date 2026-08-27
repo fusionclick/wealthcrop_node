@@ -14,7 +14,9 @@ let investorResponse = {
   data: { kyc: { ucc_code: UCC, kyc_status: "verified" }, email: "a@b.com", phone: "9999999999" },
 };
 let investorStatus = 200;
+let investorUserAgent = "";
 const authServer = http.createServer((req, res) => {
+  investorUserAgent = req.headers["user-agent"] || "";
   res.writeHead(investorStatus, { "Content-Type": "application/json" });
   res.end(JSON.stringify(investorResponse));
 });
@@ -60,7 +62,7 @@ async function boot() {
   base = `http://127.0.0.1:${server.address().port}/api`;
 }
 async function post(path, body, token = TOKEN) {
-  const headers = { "Content-Type": "application/json" };
+  const headers = { "Content-Type": "application/json", "User-Agent": "WealthCropBrowser/1.0" };
   if (token) headers.Authorization = token;
   const r = await fetch(`${base}${path}`, { method: "POST", headers, body: JSON.stringify(body) });
   return { status: r.status, body: await r.json() };
@@ -125,6 +127,12 @@ describe("order path end to end", () => {
     assert.ok(order.mem_ord_ref_id, "carries a member order reference");
     assert.equal(order.phys_or_demat, "D", "BSE refuses P for a demat-only UCC");
     assert.deepEqual(order.depository_acct, { depository: "C", dp_id: "12345678", client_id: "12345678" });
+  });
+
+  it("forwards the browser fingerprint context to Laravel", async () => {
+    const r = await post("/purchaseNewOrder", buy());
+    assert.equal(r.status, 200);
+    assert.equal(investorUserAgent, "WealthCropBrowser/1.0");
   });
 
   it("overrides a spoofed UCC with the authenticated investor's", async () => {
@@ -236,4 +244,3 @@ describe("order path end to end", () => {
     bseResponse = { status: "success", data: { items: [{ id: "ORD1" }] } };
   });
 });
-
