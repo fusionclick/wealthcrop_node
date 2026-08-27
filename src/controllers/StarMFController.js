@@ -71,6 +71,22 @@ const bseMessage = (error) => {
   );
 };
 
+// BSE's SIP-list filters do not accept UCC/member. Search narrows the gateway
+// result, and this final server-side check prevents another investor's row from
+// ever reaching the browser.
+const scopeXspResponse = (response, ucc) => {
+  const data = response?.data;
+  if (!data || typeof data !== "object") return response;
+  const key = Array.isArray(data.lists) ? "lists" : Array.isArray(data.items) ? "items" : null;
+  if (!key) return response;
+  const expected = String(ucc || "").trim();
+  const rows = data[key].filter((item) =>
+    [item?.ucc, item?.ucc_code, item?.client_code, item?.investor_ucc, item?.investor?.ucc, item?.investor?.client_code]
+      .some((value) => String(value || "").trim() === expected)
+  );
+  return { ...response, data: { ...data, [key]: rows, count: rows.length } };
+};
+
 // ponytail: browser is prefix par aata hai — container nginx `/api/bse/` ko backend ke
 // `/api/` par bhejta hai, aur `/pg/*` proxy route wahan baitha hai. Alag domain par
 // deploy karo to PUBLIC_PG_PREFIX env se override kar lena.
@@ -471,7 +487,7 @@ class StarMFController {
     }
   }
 
-  async executeWithRetry(serviceInstance, serviceMethod, reqObj, res) {
+  async executeWithRetry(serviceInstance, serviceMethod, reqObj, res, transform = (response) => response) {
     // ponytail: pehle har request par ek naya login hota tha — extra round trip aur BSE
     // par session churn (naya token purane ko mar deta hai, jis se doosri in-flight
     // request 401 khaati thi). Expiry ab response interceptor sambhalta hai, is liye
@@ -495,7 +511,7 @@ class StarMFController {
         console.error(`BSE rejected ${serviceMethod}:`, failure);
         return res.status(502).json({ status: "error", message: failure, detail: response });
       }
-      return res.json(response);
+      return res.json(transform(response));
     } catch (error) {
       const isUnauthorized = error.response?.status === 401 || 
                              error.message?.includes('401') || 
@@ -514,7 +530,7 @@ class StarMFController {
             this.accessToken,
             requestData
           );
-          return res.json(response);
+          return res.json(transform(response));
         } catch (retryError) {
           console.error(`Error in ${serviceMethod} after token refresh:`, retryError);
           // ponytail: message field bhi chahiye — UI isi ko padhta hai, details ko nahi
@@ -570,8 +586,8 @@ class StarMFController {
     };
   }
 
-  async handleTrxnRequest(serviceMethod, reqObj, res) {
-    return this.executeWithRetry("trxnService", serviceMethod, reqObj, res);
+  async handleTrxnRequest(serviceMethod, reqObj, res, transform) {
+    return this.executeWithRetry("trxnService", serviceMethod, reqObj, res, transform);
   }
 
   async handleMandateRequest(serviceMethod, req, res) {
@@ -719,22 +735,22 @@ class StarMFController {
   };
   getAllXsp = async (req, res) => {
     const input = req.body?.data || {};
+    const ucc = req.ucc || investorUcc(req.investor);
     const reqObj = {
       data: {
-        fields: ["ALL"],
-        count_only: false,
         start: Number(input.start) || 0,
         length: Math.min(Number(input.length) || 50, 100),
-        // sxp_list filter values are scalars; arrays are rejected as invalid_json.
-        // Authenticated identity always wins over browser-supplied filters.
-        filter_param: {
-          sxp_type: "SIP",
-          ucc: req.ucc || investorUcc(req.investor),
-          member: this.memberCode,
-        },
+        fields: ["ALL"],
+        count_only: false,
+        format: "",
+        sort_by: "",
+        sort_dir: "",
+        is_compressed: false,
+        search: { value: ucc },
+        filter_param: { sxp_type: "SIP", status: "active", freq: "" },
       },
     };
-    return this.handleTrxnRequest("getAllXsp", reqObj, res);
+    return this.handleTrxnRequest("getAllXsp", reqObj, res, (response) => scopeXspResponse(response, ucc));
   };
   topupXsp = async (req, res) => {
     let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.topupXspData;

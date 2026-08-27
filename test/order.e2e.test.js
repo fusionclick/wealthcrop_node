@@ -139,8 +139,17 @@ describe("order path end to end", () => {
     assert.equal(investorUserAgent, "WealthCropBrowser/1.0");
   });
 
-  it("lists the authenticated investor's SIPs with BSE's scalar filters", async () => {
-    bseResponse = { status: "success", data: { lists: [{ reg_no: "SIP1", ucc: UCC }] } };
+  it("lists only the authenticated investor's SIPs with BSE's supported filters", async () => {
+    bseResponse = {
+      status: "success",
+      data: {
+        count: 2,
+        lists: [
+          { reg_no: "SIP1", ucc: UCC },
+          { reg_no: "SIP2", ucc: "OTHER001" },
+        ],
+      },
+    };
     sent = null;
     const r = await post("/getAllXsp", {
       data: {
@@ -152,10 +161,13 @@ describe("order path end to end", () => {
     });
 
     assert.equal(r.status, 200);
+    assert.equal(r.body.data.count, 1);
+    assert.equal(r.body.data.lists.length, 1);
     assert.equal(r.body.data.lists[0].reg_no, "SIP1");
-    assert.equal(sent.data.filter_param.sxp_type, "SIP");
-    assert.equal(sent.data.filter_param.ucc, UCC);
-    assert.equal(sent.data.filter_param.member, "91010");
+    assert.deepEqual(sent.data.filter_param, { sxp_type: "SIP", status: "active", freq: "" });
+    assert.deepEqual(sent.data.search, { value: UCC });
+    assert.equal(sent.data.format, "");
+    assert.equal(sent.data.is_compressed, false);
     bseResponse = { status: "success", data: { items: [{ id: "ORD1" }] } };
   });
 
