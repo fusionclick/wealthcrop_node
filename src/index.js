@@ -14,10 +14,34 @@ if (typeof dns.setDefaultResultOrder === "function") {
 
 const app = express();
 
-// ponytail: open CORS; tighten origins if you turn credentials on
-app.use(cors());
-app.options("*", cors());
+// ponytail: lock CORS to known frontends
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://wealthcrop.co.in",
+  "https://www.wealthcrop.co.in",
+  "https://wealthcrop.co",
+  "https://www.wealthcrop.co",
+  "https://khelobindass.com",
+  "https://www.khelobindass.com",
+];
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(null, false);
+    },
+  })
+);
+app.options("*", cors({ origin: allowedOrigins }));
 app.use(express.json());
+
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
 
 // Dev request log — shows in this terminal (method, path, status, UI screen)
 if (process.env.NODE_ENV !== "production") {
