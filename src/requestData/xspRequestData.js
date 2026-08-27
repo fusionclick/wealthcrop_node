@@ -134,8 +134,8 @@ class XspRequestData {
       start: 0,
       length: 50,
       filter_param: {
-        sxp_type: ["SIP"],
-        status: ["active"]
+        sxp_type: "SIP",
+        status: "active"
       }
     }
   };

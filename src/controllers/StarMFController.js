@@ -35,6 +35,7 @@ const BSE_FIELDS = {
 const bseMessages = (r) =>
   (Array.isArray(r?.messages) ? r.messages : [])
     .map((m) => {
+      if (m?.message || m?.msg) return String(m.message || m.msg);
       const field = String(m?.field || "field").split(".").pop();
       if (BSE_FIELDS[field]) return BSE_FIELDS[field];
       const code = String(m?.errcode || "invalid");
@@ -717,7 +718,22 @@ class StarMFController {
     return this.handleTrxnRequest("cancelXsp", reqObj, res);
   };
   getAllXsp = async (req, res) => {
-    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.getAllXspData;
+    const input = req.body?.data || {};
+    const reqObj = {
+      data: {
+        fields: ["ALL"],
+        count_only: false,
+        start: Number(input.start) || 0,
+        length: Math.min(Number(input.length) || 50, 100),
+        // sxp_list filter values are scalars; arrays are rejected as invalid_json.
+        // Authenticated identity always wins over browser-supplied filters.
+        filter_param: {
+          sxp_type: "SIP",
+          ucc: req.ucc || investorUcc(req.investor),
+          member: this.memberCode,
+        },
+      },
+    };
     return this.handleTrxnRequest("getAllXsp", reqObj, res);
   };
   topupXsp = async (req, res) => {

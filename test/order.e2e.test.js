@@ -46,6 +46,10 @@ before(async () => {
     sent = payload;
     return bseResponse;
   };
+  controller.trxnService.getAllXsp = async (_t, payload) => {
+    sent = payload;
+    return bseResponse;
+  };
 
   app = express();
   app.use(express.json());
@@ -133,6 +137,26 @@ describe("order path end to end", () => {
     const r = await post("/purchaseNewOrder", buy());
     assert.equal(r.status, 200);
     assert.equal(investorUserAgent, "WealthCropBrowser/1.0");
+  });
+
+  it("lists the authenticated investor's SIPs with BSE's scalar filters", async () => {
+    bseResponse = { status: "success", data: { lists: [{ reg_no: "SIP1", ucc: UCC }] } };
+    sent = null;
+    const r = await post("/getAllXsp", {
+      data: {
+        fields: ["ALL"],
+        start: 0,
+        length: 50,
+        filter_param: { sxp_type: ["SIP"], ucc: [UCC] },
+      },
+    });
+
+    assert.equal(r.status, 200);
+    assert.equal(r.body.data.lists[0].reg_no, "SIP1");
+    assert.equal(sent.data.filter_param.sxp_type, "SIP");
+    assert.equal(sent.data.filter_param.ucc, UCC);
+    assert.equal(sent.data.filter_param.member, "91010");
+    bseResponse = { status: "success", data: { items: [{ id: "ORD1" }] } };
   });
 
   it("overrides a spoofed UCC with the authenticated investor's", async () => {
@@ -241,6 +265,7 @@ describe("order path end to end", () => {
     bseResponse = { status: "error", messages: [{ msg: "Scheme suspended" }] };
     const r = await post("/purchaseNewOrder", buy());
     assert.notEqual(r.body.status, "success", "a BSE error must not read as success");
+    assert.equal(r.body.message, "Scheme suspended");
     bseResponse = { status: "success", data: { items: [{ id: "ORD1" }] } };
   });
 });
