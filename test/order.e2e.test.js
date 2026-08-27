@@ -164,10 +164,14 @@ describe("order path end to end", () => {
     assert.equal(r.body.data.count, 1);
     assert.equal(r.body.data.lists.length, 1);
     assert.equal(r.body.data.lists[0].reg_no, "SIP1");
-    assert.deepEqual(sent.data.filter_param, { sxp_type: "SIP", status: "active", freq: "" });
+    assert.deepEqual(sent.data.filter_param, { sxp_type: "SIP", status: "active" });
     assert.deepEqual(sent.data.search, { value: UCC });
-    assert.equal(sent.data.format, "");
-    assert.equal(sent.data.is_compressed, false);
+    // format/sort_by/sort_dir/is_compressed/freq BSE ko `field is invalid_json` dete
+    // thay — koi bhi wapas aaye to ye assert tootega.
+    for (const key of ["format", "sort_by", "sort_dir", "is_compressed"]) {
+      assert.equal(sent.data[key], undefined, `${key} dobara nahi jana chahiye`);
+    }
+    assert.equal(sent.data.filter_param.freq, undefined);
     bseResponse = { status: "success", data: { items: [{ id: "ORD1" }] } };
   });
 

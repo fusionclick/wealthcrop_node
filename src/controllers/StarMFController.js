@@ -87,6 +87,39 @@ const scopeXspResponse = (response, ucc) => {
   return { ...response, data: { ...data, [key]: rows, count: rows.length } };
 };
 
+/**
+ * getAllXsp (sxp_list) ka payload.
+ *
+ * Sirf wahi keys jo is codebase ki kisi *chalti hui* BSE call mein maujood hain —
+ * `src/mf/catalogue.js` ka master-scheme-list production mein roz chalta hai aur
+ * bilkul yehi shape bhejta hai: start, length, fields, count_only, filter_param, search.
+ *
+ * Hataye gaye: format:"", sort_by:"", sort_dir:"", is_compressed:false aur
+ * filter_param.freq:"". Ye chaar kisi kaam karti call mein kabhi nahi thay; BSE poori
+ * request ko `field is invalid_json` keh kar reject karta tha aur executeWithRetry usay
+ * 502 bana deta tha — SIPs page hamesha khali. Khali string BSE ke liye valid enum
+ * nahi hai (sibling getClientPortfolio par bhi yehi kahani likhi hai: galat shakl ka
+ * filter = invalid_json).
+ *
+ * ponytail: `search` isi liye rakha hai ke wo gateway par result narrow karta hai, aur
+ * `scopeXspResponse` uske baad bhi UCC par filter karta hai — narrowing fail bhi ho to
+ * doosre client ka data browser tak nahi jata. Agar `invalid_json` ab bhi aaye to agla
+ * shak isi `search` par hai (sxp_list ke liye unproven); usay hata dena, correctness
+ * par koi asar nahi parega, sirf paging tang ho jayegi.
+ */
+const buildXspListPayload = (input, ucc) => ({
+  data: {
+    // Clamp dono taraf — `-5` truthy hai, is liye `|| 50` usay nahi pakarta aur
+    // BSE ko manfi length chali jati hai.
+    start: Math.max(Number(input?.start) || 0, 0),
+    length: Math.min(Math.max(Number(input?.length) || 50, 1), 100),
+    fields: ["ALL"],
+    count_only: false,
+    filter_param: { sxp_type: "SIP", status: "active" },
+    search: { value: String(ucc || "") },
+  },
+});
+
 // ponytail: browser is prefix par aata hai — container nginx `/api/bse/` ko backend ke
 // `/api/` par bhejta hai, aur `/pg/*` proxy route wahan baitha hai. Alag domain par
 // deploy karo to PUBLIC_PG_PREFIX env se override kar lena.
@@ -734,22 +767,8 @@ class StarMFController {
     return this.handleTrxnRequest("cancelXsp", reqObj, res);
   };
   getAllXsp = async (req, res) => {
-    const input = req.body?.data || {};
     const ucc = req.ucc || investorUcc(req.investor);
-    const reqObj = {
-      data: {
-        start: Number(input.start) || 0,
-        length: Math.min(Number(input.length) || 50, 100),
-        fields: ["ALL"],
-        count_only: false,
-        format: "",
-        sort_by: "",
-        sort_dir: "",
-        is_compressed: false,
-        search: { value: ucc },
-        filter_param: { sxp_type: "SIP", status: "active", freq: "" },
-      },
-    };
+    const reqObj = buildXspListPayload(req.body?.data, ucc);
     return this.handleTrxnRequest("getAllXsp", reqObj, res, (response) => scopeXspResponse(response, ucc));
   };
   topupXsp = async (req, res) => {
@@ -1603,3 +1622,5 @@ class StarMFController {
 module.exports = new StarMFController();
 module.exports.bseMessage = bseMessage;
 module.exports.bseFailure = bseFailure;
+module.exports.buildXspListPayload = buildXspListPayload;
+module.exports.scopeXspResponse = scopeXspResponse;
