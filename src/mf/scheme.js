@@ -97,6 +97,27 @@ function allowedModes(scheme, txnType = "Purchase") {
   return { demat: modes.includes("demat"), physical: modes.includes("physical") };
 }
 
+// BSE `systematic[]` mein har SIP frequency ki apni row hoti hai aur `sip_flag` "Y"/"N".
+// Ek bhi row par Y ho to scheme SIP leti hai. Array hi na ho to jawab null — "pata nahi",
+// false nahi, warna har scheme "SIP: No" dikhne lagti.
+function sipAllowed(scheme = {}) {
+  const rows = Array.isArray(scheme.systematic) ? scheme.systematic : [];
+  if (!rows.length) return flag(scheme.sip_allowed ?? scheme.sip_flag);
+  const flags = rows.map((r) => flag(r?.sip_flag ?? r?.systematic_sip_flag ?? r?.sip_allowed));
+  if (flags.some((f) => f === true)) return true;
+  return flags.some((f) => f === false) ? false : null;
+}
+
+// Direct = investor seedha AMC se khareedta hai (koi commission nahi). Regular = distributor
+// ke through, trail commission isi par milta hai. BSE `scheme_plan` bhejta hai; khali ho to
+// naam mein hamesha likha hota hai.
+function planOf(scheme = {}) {
+  const hay = `${scheme.scheme_plan || ""} ${scheme.name || scheme.scheme_name || ""}`;
+  if (/\bdirect\b/i.test(hay)) return "Direct";
+  if (/\bregular\b/i.test(hay)) return "Regular";
+  return null;
+}
+
 function mapScheme(scheme = {}, index = 0) {
   const name = scheme.name || scheme.scheme_name || "";
   const isin = scheme.scheme_isin || scheme.isin || "";
@@ -109,6 +130,7 @@ function mapScheme(scheme = {}, index = 0) {
 
   const minRedeem = scheme.min_redemption_amount ?? scheme.min_redeem_amt;
   const nav = scheme.nav ?? scheme.nav_value;
+  const modes = allowedModes(scheme);
   return {
     id: index + 1,
     name,
@@ -121,11 +143,13 @@ function mapScheme(scheme = {}, index = 0) {
     minLumpsum: minLumpsum != null && minLumpsum !== "" ? Number(minLumpsum) : null,
     minRedeem: minRedeem != null && minRedeem !== "" ? Number(minRedeem) : null,
     purchase_allowed: scheme.purchase_allowed ?? scheme.purchase_allow ?? null,
-    sip_allowed: scheme.sip_allowed ?? scheme.sip_flag ?? null,
+    sip_allowed: sipAllowed(scheme),
     scheme_status: scheme.is_active ?? scheme.scheme_status ?? scheme.status ?? null,
     scheme_offer_status: clean(scheme.scheme_offer_status) || null,
     // Physical-only schemes ka Invest form kholna bekaar hai — UCC demat par hai.
-    holding_modes: allowedModes(scheme),
+    holding_modes: modes,
+    physical_only: modes ? modes.physical === true && modes.demat === false : false,
+    plan: planOf(scheme),
     scheme_plan: clean(scheme.scheme_plan) || null,
     scheme_option: clean(scheme.scheme_option) || null,
     scheme_amc_name: clean(scheme.scheme_amc_name || scheme.amc_name) || null,
@@ -339,7 +363,10 @@ function parseListQuery(body = {}) {
     .replace(/-/g, "_");
   const isin = String(body.isin || body.scheme_isin || src.scheme_isin || "").trim();
   const scheme_code = String(body.scheme_code || body.scheme_bse_code || src.scheme_code || "").trim();
-  return { start, length, search, category, isin, scheme_code };
+  const plan = String(body.plan || src.plan || "").trim().toLowerCase();
+  const sip = String(body.sip || src.sip || "").trim().toLowerCase();
+  const mode = String(body.mode || src.mode || "").trim().toLowerCase();
+  return { start, length, search, category, isin, scheme_code, plan, sip, mode };
 }
 
 function categorySearch(category) {
@@ -351,6 +378,7 @@ function categorySearch(category) {
       small_cap: "SMALL CAP",
       high_return: "FLEXI CAP",
       "5_star_funds": "BLUECHIP",
+      kotak_funds: "KOTAK",
     }[category] || ""
   );
 }
@@ -361,6 +389,9 @@ function matchesCategory(item, category) {
   if (category === "large_cap") return hay.includes("large cap") || hay.includes("large & mid");
   if (category === "mid_cap") return /\bmid cap\b/.test(hay) || hay.includes("large & mid");
   if (category === "small_cap") return hay.includes("small cap");
+  if (category === "kotak_funds") {
+    return /kotak/i.test(`${item.scheme_amc_name || ""} ${item.name || ""}`);
+  }
   if (category === "gold_funds") {
     return /\bgold\b/.test(hay) || /\bsilver\b/.test(hay) || hay.includes("precious metal");
   }
@@ -375,16 +406,27 @@ const LIST_TTL_MS = 5 * 60 * 1000;
 const listCache = new Map();
 
 function listCacheKey(q = {}) {
-  return [q.category, q.search, q.start, q.length, q.isin, q.scheme_code].join("|");
+  return [q.category, q.search, q.start, q.length, q.isin, q.scheme_code, q.plan, q.sip, q.mode].join("|");
 }
 
-function getListCache(key) {
+const STALE_MAX_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * `allowStale` par expire ho chuki entry bhi wapas milti hai — BSE gir jaye to kal ka
+ * page dikhana 502 se behtar hai. ponytail: fresh lookup expired row ko delete NAHI
+ * karta, warna stale rescue ke waqt wo ja chuki hoti. Delete sirf STALE_MAX_MS ke baad,
+ * taake Map hamesha ke liye barhta na rahe.
+ */
+function getListCache(key, allowStale = false) {
   const row = listCache.get(key);
-  if (!row || Date.now() > row.exp) {
+  if (!row) return null;
+  const age = Date.now() - row.exp;
+  if (age <= 0) return row.data;
+  if (age > STALE_MAX_MS) {
     listCache.delete(key);
     return null;
   }
-  return row.data;
+  return allowStale ? row.data : null;
 }
 
 function setListCache(key, data) {
@@ -396,6 +438,8 @@ module.exports = {
   isTransactable,
   windowOpen,
   allowedModes,
+  sipAllowed,
+  planOf,
   mapScheme,
   pickScheme,
   navLookup,

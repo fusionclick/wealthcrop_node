@@ -49,7 +49,11 @@ describe("catalogue", () => {
 
   it("paginates and parses list query", () => {
     const q = parseListQuery({ start: 20, length: 10, search: "gold" });
-    assert.deepEqual(q, { start: 20, length: 10, search: "gold", category: "", isin: "", scheme_code: "" });
+    assert.deepEqual(q, { start: 20, length: 10, search: "gold", category: "", isin: "", scheme_code: "", plan: "", sip: "", mode: "" });
+    assert.deepEqual(
+      parseListQuery({ plan: "Direct", sip: "YES", mode: "Physical" }),
+      { start: 0, length: 20, search: "", category: "", isin: "", scheme_code: "", plan: "direct", sip: "yes", mode: "physical" }
+    );
     assert.deepEqual(paginate([1, 2, 3, 4, 5], 2, 2), [3, 4]);
     assert.equal(matchesCategory({ name: "HDFC Large Cap", subType: "Equity • Large Cap" }, "large_cap"), true);
     assert.equal(matchesCategory({ name: "Nippon Gold", subType: "Commodity" }, "gold_funds"), true);
@@ -274,9 +278,12 @@ describe("mobile normalization", () => {
     assert.equal(normalizeMobile(""), "");
   });
   it("falls back to the test account number only for that email", () => {
+    const { BSE_PLACEHOLDER_MOBILE } = require("../src/mf/order");
     assert.equal(investorMobile({ email: "rminhal783@gmail.com", phone: "1987542630" }), "8617029131");
-    assert.equal(investorMobile({ email: "someone@else.com", phone: "1987542630" }), "");
     assert.equal(investorMobile({ email: "someone@else.com", phone: "9876543210" }), "9876543210");
+    // signup email-only hai: koi usable number na ho to BSE placeholder jata hai
+    assert.equal(investorMobile({ email: "someone@else.com", phone: "1987542630" }), BSE_PLACEHOLDER_MOBILE);
+    assert.equal(investorMobile({}), BSE_PLACEHOLDER_MOBILE);
   });
   it("puts the clean number on the order and every holder", () => {
     const o = normalizeOrder(
@@ -533,5 +540,77 @@ describe("payment page proxy", () => {
   it("leaves other hosts alone", () => {
     const html = '<a href="https://bank.example/pay">pay</a>';
     assert.equal(proxify(html), html);
+  });
+});
+
+describe("kycFromUcc", () => {
+  const { kycFromUcc, uccPan, investorPan } = require("../src/mf/kyc");
+
+  it("APPROVED is verified, with no reasons", () => {
+    const ready = [{ mode: "DEMAT", verified_status: "FALSE", verification_failed_reason: "" }];
+    const out = kycFromUcc({ ucc_status: "APPROVED", is_client_demat: true, transaction_ready: ready }, "USRWC56442");
+    assert.equal(out.kyc_status, "verified");
+    assert.equal(out.ucc_status, "APPROVED");
+    assert.equal(out.ucc, "USRWC56442");
+    assert.deepEqual(out.reasons, [], "verified_status FALSE is not a reason — orders went through with it");
+    assert.deepEqual(out.transaction_ready, ready);
+    assert.ok(!Number.isNaN(Date.parse(out.checked_at)), "checked_at is an ISO timestamp");
+  });
+
+  it("PENDING_VERIFICATION is pending and carries BSE's reason", () => {
+    const out = kycFromUcc(
+      {
+        ucc_status: "PENDING_VERIFICATION",
+        transaction_ready: [
+          { mode: "DEMAT", verified_status: "FALSE", verification_failed_reason: "KYC not found" },
+          { mode: "PHYSICAL", verified_status: "FALSE", verification_failed_reason: "KYC not found" },
+        ],
+      },
+      "USRWC003"
+    );
+    assert.equal(out.kyc_status, "pending");
+    assert.deepEqual(out.reasons, ["KYC not found"], "same reason on both modes is listed once");
+  });
+
+  it("REJECTED / DEACTIVATED are rejected", () => {
+    assert.equal(kycFromUcc({ ucc_status: "REJECTED" }, "X").kyc_status, "rejected");
+    assert.equal(kycFromUcc({ ucc_status: "deactivated" }, "X").kyc_status, "rejected");
+  });
+
+  it("no record is unknown — never a status Laravel would store", () => {
+    const out = kycFromUcc(null, "X");
+    assert.equal(out.kyc_status, "unknown");
+    assert.equal(out.ucc_status, null);
+    assert.deepEqual(out.reasons, []);
+    assert.equal(kycFromUcc({ ucc_status: "SOMETHING_NEW" }, "X").kyc_status, "unknown");
+  });
+});
+
+describe("UCC ownership", () => {
+  const { uccPan, investorPan } = require("../src/mf/kyc");
+
+  it("reads the holder PAN out of a get_ucc record", () => {
+    const record = {
+      ucc_status: "APPROVED",
+      holder: [{ holder_rank: "1", identifier: [{ identifier_type: "pan", identifier_number: "nytpa0008a" }] }],
+    };
+    assert.equal(uccPan(record), "NYTPA0008A", "case-normalised");
+    // BSE reads back different key names than add_ucc writes, so a couple of shapes are accepted
+    assert.equal(uccPan({ holders: [{ identifiers: [{ identifier_type: "PAN", identifier_number: "ABCDE1234F" }] }] }), "ABCDE1234F");
+    assert.equal(uccPan({ pan: "ABCDE1234F" }), "ABCDE1234F");
+  });
+
+  it("is null when no readable PAN is present — the caller must not block on that", () => {
+    assert.equal(uccPan(null), null);
+    assert.equal(uccPan({ ucc_status: "APPROVED" }), null);
+    assert.equal(uccPan({ holder: [{ identifier: [{ identifier_type: "aadhaar", identifier_number: "999941057058" }] }] }), null);
+    assert.equal(uccPan({ pan: "NOT-A-PAN" }), null, "garbage is not a PAN");
+  });
+
+  it("reads the investor's own PAN from the Laravel investor record", () => {
+    assert.equal(investorPan({ profile: { pan_number: "abcde1234f" } }), "ABCDE1234F");
+    assert.equal(investorPan({ pan: "ABCDE1234F" }), "ABCDE1234F");
+    assert.equal(investorPan({}), null);
+    assert.equal(investorPan({ profile: { pan_number: "" } }), null);
   });
 });

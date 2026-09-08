@@ -14,19 +14,26 @@ describe("BSE token refresh", () => {
         : config.headers?.Authorization) || ""
     );
 
+  // loginFunc ko stub karna dedupe/breaker ko hi bypass kar deta tha. bseLogin() asli
+  // network call hai — us par stub lagane se loginFunc ka poora guard chalta hai.
   const stubLogin = (counter) => {
-    controller.loginFunc = async () => {
+    controller.bseLogin = async () => {
       counter.logins += 1;
       controller.accessToken = "FRESH";
       return { status: "success" };
     };
   };
 
+  const resetLogin = () => {
+    controller.loginInflight = null;
+    controller.loginDownUntil = 0;
+  };
+
   it("refreshes and replays once when BSE answers 401", async () => {
     const seen = [];
     const counter = { logins: 0 };
     controller.accessToken = "STALE";
-    controller.loginInflight = null;
+    resetLogin();
     stubLogin(counter);
     ax.defaults.adapter = async (config) => {
       seen.push(authOf(config));
@@ -52,7 +59,7 @@ describe("BSE token refresh", () => {
     const counter = { logins: 0 };
     let attempts = 0;
     controller.accessToken = "STALE";
-    controller.loginInflight = null;
+    resetLogin();
     stubLogin(counter);
     ax.defaults.adapter = async (config) => {
       attempts += 1;
@@ -72,7 +79,7 @@ describe("BSE token refresh", () => {
     const counter = { logins: 0 };
     let first = true;
     controller.accessToken = "STALE";
-    controller.loginInflight = null;
+    resetLogin();
     stubLogin(counter);
     ax.defaults.adapter = async (config) => {
       if (first || authOf(config).includes("STALE")) {
@@ -90,6 +97,46 @@ describe("BSE token refresh", () => {
     );
 
     // BSE ek hi session rakhta hai — 4 parallel logins purane token ko maar dete.
+    assert.equal(counter.logins, 1);
+  });
+
+  // BSE pahunch se bahar ho to har request apna poora timeout jalati thi — do page
+  // loads = do 21s waits, nginx ke saamne 502. Cooldown wo burst nigal jata hai.
+  it("stops re-dialling BSE for the cooldown after a failed login", async () => {
+    let attempts = 0;
+    controller.accessToken = null;
+    resetLogin();
+    controller.bseLogin = async () => {
+      attempts += 1;
+      return controller.markLoginDown("connect ETIMEDOUT");
+    };
+
+    const first = await controller.loginFunc();
+    assert.equal(first.status, "error");
+    assert.equal(attempts, 1);
+
+    // cooldown ke andar: koi naya round trip nahi, error foran
+    const second = await controller.loginFunc();
+    assert.equal(second.status, "error");
+    assert.equal(attempts, 1, "cooldown ke andar BSE ko dobara nahi chhera jata");
+
+    // cooldown khatam: asli koshish dobara hoti hai (order paths phansi na rahen)
+    controller.loginDownUntil = 0;
+    await controller.loginFunc();
+    assert.equal(attempts, 2, "cooldown ke baad retry hona chahiye");
+  });
+
+  it("skips the round trip entirely when a token is already held", async () => {
+    const counter = { logins: 0 };
+    resetLogin();
+    stubLogin(counter);
+    controller.accessToken = "LIVE";
+
+    await controller.loginFunc();
+    assert.equal(counter.logins, 0, "token maujood ho to login nahi bhejna");
+
+    // refreshToken ab bhi zabardasti naya token leta hai
+    await controller.refreshToken();
     assert.equal(counter.logins, 1);
   });
 });

@@ -126,3 +126,126 @@ describe("catalogue login failure", () => {
     }
   });
 });
+
+describe("amfi catalogue fallback", () => {
+  const SAMPLE = [
+    "Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date",
+    "",
+    "Open Ended Schemes(Equity Scheme - Large Cap Fund)",
+    "",
+    "Axis Mutual Fund",
+    "",
+    "135762;INF846K01WO1;-;Axis Bluechip Fund;Direct Plan;Growth Option;30.3228;04-Sep-2026",
+    "135763;INF846K01WP8;-;Axis Midcap Fund;Direct Plan;Growth Option;0;04-Sep-2026",
+  ].join("\n");
+
+  it("reads name, AMC and category out of the section banners", () => {
+    const { parseNavSchemes } = require("../src/mf/amfiNav");
+    const rows = parseNavSchemes(SAMPLE);
+    assert.equal(rows.length, 1, "a zero NAV is not a priced scheme");
+    assert.equal(rows[0].scheme_name, "Axis Bluechip Fund");
+    assert.equal(rows[0].scheme_amc_name, "Axis Mutual Fund");
+    assert.match(rows[0].scheme_category, /Large Cap/);
+    assert.equal(rows[0].nav, 30.3228);
+  });
+
+  it("stays empty when BSE is down and the flag is off, serves AMFI when it is on", async () => {
+    const amfiMod = require("../src/mf/amfiNav");
+    const realGet = amfiMod.getAmfiNavs;
+    const realFlag = process.env.MF_AMFI_FALLBACK;
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      amfiMod.getAmfiNavs = async () => ({
+        at: Date.now(),
+        navs: {},
+        schemes: amfiMod.parseNavSchemes(SAMPLE),
+      });
+      const deadBse = {
+        accessToken: null,
+        loginFunc: async () => ({ status: "error", message: "unreachable" }),
+      };
+
+      delete process.env.MF_AMFI_FALLBACK;
+      delete require.cache[require.resolve("../src/mf/catalogue")];
+      const off = await require("../src/mf/catalogue").getCatalogue(deadBse, {});
+      assert.deepEqual(off, { list: [], total: 0, unpriced: 0 }, "production behaviour is unchanged");
+
+      process.env.MF_AMFI_FALLBACK = "1";
+      delete require.cache[require.resolve("../src/mf/catalogue")];
+      const on = await require("../src/mf/catalogue").getCatalogue(deadBse, {});
+      assert.equal(on.total, 1);
+      assert.equal(on.list[0].name, "Axis Bluechip Fund");
+      assert.equal(on.list[0].source, "amfi");
+    } finally {
+      console.warn = warn;
+      amfiMod.getAmfiNavs = realGet;
+      if (realFlag === undefined) delete process.env.MF_AMFI_FALLBACK;
+      else process.env.MF_AMFI_FALLBACK = realFlag;
+      delete require.cache[require.resolve("../src/mf/catalogue")];
+    }
+  });
+});
+
+describe("catalogue filters", () => {
+// Plan / SIP / holding-mode filters: BSE ke per-scheme flags par, aur `null`
+// ("BSE ne bataya nahi") kabhi "no" nahi ginta.
+    it("query filters on plan, sip and holding mode", () => {
+    const { query } = require("../src/mf/catalogue");
+    const rows = [
+      { name: "A Direct Growth", plan: "Direct", sip_allowed: true, holding_modes: { demat: true, physical: false } },
+      { name: "B Regular Growth", plan: "Regular", sip_allowed: false, holding_modes: { demat: true, physical: true } },
+      { name: "C Pension Plan", plan: null, sip_allowed: null, holding_modes: { demat: false, physical: true } },
+    ];
+    assert.deepEqual(query(rows, { plan: "direct" }).lists.map((r) => r.name), ["A Direct Growth"]);
+    assert.deepEqual(query(rows, { sip: "yes" }).lists.map((r) => r.name), ["A Direct Growth"]);
+    assert.deepEqual(query(rows, { sip: "no" }).lists.map((r) => r.name), ["B Regular Growth"]);
+    assert.deepEqual(query(rows, { mode: "physical" }).lists.map((r) => r.name), ["B Regular Growth", "C Pension Plan"]);
+    assert.deepEqual(query(rows, { mode: "demat" }).lists.map((r) => r.name), ["A Direct Growth", "B Regular Growth"]);
+    assert.equal(query(rows, {}).total, 3);
+    });
+
+    it("scheme flags come off the real BSE shapes", () => {
+    const { mapScheme, sipAllowed, planOf } = require("../src/mf/scheme");
+    assert.equal(sipAllowed({ systematic: [{ sip_flag: "N" }, { sip_flag: "Y" }] }), true);
+    assert.equal(sipAllowed({ systematic: [{ sip_flag: "N" }] }), false);
+    assert.equal(sipAllowed({}), null);
+    assert.equal(planOf({ scheme_plan: "DIRECT" }), "Direct");
+    assert.equal(planOf({ scheme_name: "HDFC Flexi Cap - Regular Plan - Growth" }), "Regular");
+    assert.equal(planOf({ scheme_name: "HDFC Flexi Cap" }), null);
+
+    const physical = mapScheme({
+      scheme_name: "Franklin Pension Plan",
+      lumpsum: [
+        {
+          scheme_transaction_type: "Purchase",
+          scheme_transaction_mode_allowed: [{ scheme_transaction_mode_demat_physical_allowed: "PHYSICAL" }],
+        },
+      ],
+    });
+    assert.equal(physical.physical_only, true);
+    assert.equal(mapScheme({ scheme_name: "X" }).physical_only, false);
+    });
+});
+
+describe("hidden schemes", () => {
+  const { isHidden, resetHiddenCache, getHidden } = require("../src/mf/hidden");
+
+  it("matches on BSE code or ISIN, case-insensitively", () => {
+    resetHiddenCache({ codes: ["FR011-DP"], isins: ["INF179K01VA8"] });
+    const hidden = { codes: new Set(["FR011-DP"]), isins: new Set(["INF179K01VA8"]) };
+    assert.equal(isHidden(hidden, { scheme_bse_code: "fr011-dp" }), true);
+    assert.equal(isHidden(hidden, { scheme_isin: "inf179k01va8" }), true);
+    assert.equal(isHidden(hidden, { scheme_bse_code: "119551" }), false);
+    assert.equal(isHidden(hidden, {}), false);
+  });
+
+  it("fails open when Laravel cannot be reached", async () => {
+    // No stub server on the configured host: the list must come back empty rather than
+    // throwing, otherwise one Laravel outage empties the whole fund catalogue.
+    resetHiddenCache();
+    const hidden = await getHidden();
+    assert.equal(hidden.codes.size, 0);
+    assert.equal(isHidden(hidden, { scheme_bse_code: "ANY" }), false);
+  });
+});

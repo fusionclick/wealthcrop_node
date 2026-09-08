@@ -5,8 +5,11 @@ const StarMFService = require("bse-starmfv2-sdk");
 const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
-const { getCatalogue, query } = require("../mf/catalogue");
-const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile } = require("../mf/order");
+const { getCatalogue, query, AMFI_FALLBACK } = require("../mf/catalogue");
+const { getHidden, isHidden } = require("../mf/hidden");
+const { getAmfiNavs } = require("../mf/amfiNav");
+const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE } = require("../mf/order");
+const { kycFromUcc, uccPan, investorPan } = require("../mf/kyc");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
 const xspRequestData = require("../requestData/xspRequestData");
@@ -16,6 +19,11 @@ const paymentRequestData = require("../requestData/paymentRequestData");
 const fetch2FALinkRequestData = require("../requestData/fetch2FALinkRequestData");
 const mandateRequestData = require("../requestData/mandateRequestData");
 const navRequestData = require("../requestData/navRequestData");
+
+// 30s login timeout nginx ke proxy_read_timeout se lamba tha — BSE chup ho jaye to
+// upstream ka jawab aane se pehle hi gateway 502 de deta tha. Asli login <2s leta hai.
+const LOGIN_TIMEOUT_MS = Number(process.env.BSE_LOGIN_TIMEOUT_MS) || 10000;
+const LOGIN_COOLDOWN_MS = Number(process.env.BSE_LOGIN_COOLDOWN_MS) || 30000;
 
 // ponytail: BSE galtiyan `messages[]` mein bhejta hai — {msgid, errcode, field, vals}.
 // `field` par order ka ref id prefix hota hai ("726215.depository_acct"), wo hata do.
@@ -167,6 +175,8 @@ class StarMFController {
     this.baseUrl = configData.baseUrl;
     this.memberCode = configData.memberCode;
     this.accessToken = null; //need to check for token expiration time
+    this.loginInflight = null;
+    this.loginDownUntil = 0;
     this.tokenExpiry = "";
     // ponytail: follow BSE_BASE_URL (demo|prod) — was hardcoded demo while .env used prod
     this.bseDemoUrl = `${String(configData.baseUrl).replace(/\/$/, "")}/api`;
@@ -221,13 +231,8 @@ class StarMFController {
    * aur BSE purane session ko invalid kar deta hai — phir sab kuch dobara 401 ho jata.
    */
   refreshToken() {
-    if (!this.loginInflight) {
-      this.accessToken = null;
-      this.loginInflight = this.loginFunc().finally(() => {
-        this.loginInflight = null;
-      });
-    }
-    return this.loginInflight;
+    this.accessToken = null;
+    return this.loginFunc();
   }
 
   // Direct Axios BSE Login
@@ -360,7 +365,7 @@ class StarMFController {
                       },
                       "contact": [
                           {
-                              "contact_number": mobile || "9912345678",
+                              "contact_number": normalizeMobile(mobile) || BSE_PLACEHOLDER_MOBILE,
                               "country_code": "91",
                               "whose_contact_number": "SE",
                               "email_address": email || "v2001@gmail.com",
@@ -483,15 +488,40 @@ class StarMFController {
     }
   };
 
+  /**
+   * 14 call sites `if (!this.accessToken) await this.loginFunc()` karte hain. BSE down ho
+   * to har request apna poora timeout jalati thi — ek page load ke do parallel calls = do
+   * 21s waits, aur nginx ke saamne 502. Teen guard yahin, shared jagah par:
+   *   1. token maujood hai   -> koi round trip nahi
+   *   2. login chal raha hai -> ussi ka intezar (parallel logins BSE session invalid karte hain)
+   *   3. abhi fail hua       -> COOLDOWN tak seedha error, BSE ko dobara nahi chhedte
+   *
+   * ponytail: cooldown 30s — ek page load ka burst nigal jata hai, phir bhi user ka retry
+   * asli koshish karta hai. Order paths ko wahi `{status:"error"}` milta hai jo fail login
+   * par pehle bhi milta tha, bas 21s ke bajaye foran. Cooldown chhota/bara karna ho to
+   * BSE_LOGIN_COOLDOWN_MS.
+   */
   async loginFunc() {
     if (!this.username || !this.password) {
       return { status: "error", message: "BSE credentials not configured" };
     }
+    if (this.accessToken) return { status: "success", data: { access_token: this.accessToken } };
+    if (this.loginInflight) return this.loginInflight;
+    if (Date.now() < this.loginDownUntil) {
+      return { status: "error", message: this.loginDownMessage || "BSE login unavailable" };
+    }
+    this.loginInflight = this.bseLogin().finally(() => {
+      this.loginInflight = null;
+    });
+    return this.loginInflight;
+  }
+
+  async bseLogin() {
     try {
       const response = await axios.post(
         `${this.bseDemoUrl}/login`,
         { data: { username: this.username, password: this.password } },
-        { httpsAgent: this.insecureAgent, timeout: 30000 }
+        { httpsAgent: this.insecureAgent, timeout: LOGIN_TIMEOUT_MS }
       );
       const data = response.data || {};
       this.accessToken =
@@ -502,12 +532,9 @@ class StarMFController {
         data?.token ||
         null;
       if (!this.accessToken) {
-        return {
-          status: "error",
-          message: data?.message || "BSE login returned no token",
-          detail: data,
-        };
+        return this.markLoginDown(data?.message || "BSE login returned no token", data);
       }
+      this.loginDownUntil = 0;
       return data.status ? data : { status: "success", data: { access_token: this.accessToken } };
     } catch (error) {
       const message =
@@ -516,8 +543,14 @@ class StarMFController {
         error.code ||
         "BSE login failed";
       console.error("BSE login failed:", message);
-      return { status: "error", message: String(message), detail: error.response?.data || null };
+      return this.markLoginDown(message, error.response?.data || null);
     }
+  }
+
+  markLoginDown(message, detail = null) {
+    this.loginDownUntil = Date.now() + LOGIN_COOLDOWN_MS;
+    this.loginDownMessage = String(message);
+    return { status: "error", message: String(message), detail };
   }
 
   async executeWithRetry(serviceInstance, serviceMethod, reqObj, res, transform = (response) => response) {
@@ -795,19 +828,25 @@ class StarMFController {
     if (!parsed.ok) {
       return res.status(400).json({ status: "error", message: parsed.error });
     }
+    // Admin ne scheme chhupayi ho to nayi purchase nahi — list se hatana kaafi nahi,
+    // purana buy link kaam karta rehta. Redemption par ye guard nahi lagta: chhupi hui
+    // scheme mein pade units nikalne se kabhi nahi roka jata.
+    if (String(parsed.order.type || "").toLowerCase() === "p") {
+      const hidden = await getHidden();
+      if (isHidden(hidden, { scheme_bse_code: parsed.order.scheme })) {
+        return res.status(403).json({
+          status: "error",
+          message: "This scheme is not available for investment.",
+        });
+      }
+    }
     const ucc = req.ucc || investorUcc(req.investor);
     const scheme = await this.lookupScheme(parsed.order.scheme);
     const limits = checkSchemeLimits(parsed.order, scheme);
     if (!limits.ok) {
       return res.status(400).json({ status: "error", message: limits.error });
     }
-    const mobile = investorMobile(req.investor) || normalizeMobile(parsed.order.mobnum);
-    if (!mobile) {
-      return res.status(400).json({
-        status: "error",
-        message: "A valid 10-digit Indian mobile number is required. Update it in your profile before investing.",
-      });
-    }
+    const mobile = normalizeMobile(parsed.order.mobnum) || investorMobile(req.investor);
     const dp = parsed.order.depository_acct?.dp_id ? parsed.order.depository_acct : await this.lookupDepository(ucc);
     // ponytail: payload wahi jo order 5001433387 par chala tha — scheme code jaisa
     // frontend bheje, mode DP par, aur koi pre-flight guard nahi. Resolved code aur
@@ -931,7 +970,7 @@ class StarMFController {
       const { data } = await axios.post(
         `${this.bseDemoUrl}/v2/get_ucc`,
         { data: { member_code: { member_id: this.memberCode }, investor: { client_code: ucc } } },
-        { headers: { Authorization: `Bearer ${this.accessToken}` } }
+        { headers: { Authorization: `Bearer ${this.accessToken}` }, timeout: 15000 }
       );
       info = data?.data || null;
     } catch (error) {
@@ -951,6 +990,42 @@ class StarMFController {
     const code = String(acct.depository_code || "").toUpperCase();
     return { depository: code.startsWith("N") ? "N" : "C", dp_id: acct.dp_id, client_id: acct.client_id };
   }
+
+  // ponytail: KYC ka verdict yahin se — Laravel is endpoint ko investor ke bearer ke saath
+  // poochta hai aur dono kyc_status columns khud likhta hai; browser kabhi nahi. lookupUcc
+  // ka 60s cache jaan-boojh kar reuse hai: fail ke baad ek minute tak wahi jawab dohrayega.
+  kycBseStatus = async (req, res) => {
+    // ponytail: ye explicit "abhi poocho" hai — 60s cache yahan galat hai, kyunki fail ke
+    // baad ka null bhi cache hota hai aur "Check again" ek minute tak wahi purana jawab
+    // dohrata rehta. Order path ka cache waise hi rehta hai.
+    delete this._uccCache[req.ucc];
+    const record = await this.lookupUcc(req.ucc);
+    if (!record) {
+      // lookupUcc null deta hai chahe BSE down ho ya UCC hai hi nahi — dono ko ek hi
+      // sach mat batao, log/support isi message ko padhte hain.
+      return res.status(502).json({ status: "error", message: "Could not read this UCC from BSE" });
+    }
+
+    // Client code browser se aata hai, is liye maalik ka faisla BSE ke record se hota hai:
+    // kisi aur ke APPROVED UCC par apna KYC verified karwana yahin rukta hai.
+    const owner = uccPan(record);
+    const mine = investorPan(req.investor);
+    if (owner && mine && owner !== mine) {
+      console.warn("[kyc] UCC PAN mismatch", { ucc: req.ucc, owner, investor: req.investor?.id });
+      return res.status(403).json({ status: "error", message: "This UCC belongs to a different PAN" });
+    }
+    if (!owner || !mine) {
+      // Fail-open, par chup-chaap nahi: agar BSE ne shape badli to ye line logs mein dikhegi.
+      console.warn("[kyc] UCC ownership unverified", { ucc: req.ucc, bsePan: Boolean(owner), investorPan: Boolean(mine) });
+    }
+
+    const verdict = kycFromUcc(record, req.ucc);
+    if (verdict.kyc_status === "unknown") {
+      // Field rename yahin pakda jayega — warna investor hamesha "awaiting verification" dekhta hai.
+      console.warn("[kyc] unmapped ucc_status from BSE", { ucc: req.ucc, ucc_status: record?.ucc_status });
+    }
+    return res.json({ status: "success", data: verdict });
+  };
 
   async lookupScheme(code) {
     if (!code) return null;
@@ -986,10 +1061,13 @@ class StarMFController {
     try {
       const { list, total: fetched, unpriced, fields, sample } = await getCatalogue(this, q);
       // Page already comes from BSE; only filter this page (don't re-slice start).
-      const { lists } = query(list, { category: q.category, isin: q.isin, scheme_code: q.scheme_code, start: 0, length: q.length });
+      const { lists } = query(list, { category: q.category, isin: q.isin, scheme_code: q.scheme_code, plan: q.plan, sip: q.sip, mode: q.mode, start: 0, length: q.length });
       const total = fetched || lists.length;
       const lookedUp = q.search || q.isin || q.scheme_code || q.category;
       if (!lists.length && !fetched && !lookedUp) {
+        // stale-if-error: kal ka catalogue dikhana 502 se behtar hai.
+        const stale = getListCache(cacheKey, true);
+        if (stale) return res.json(stale);
         return res.status(502).json({ status: "error", message: "BSE scheme list unavailable" });
       }
       const payload = {
@@ -1008,6 +1086,11 @@ class StarMFController {
       setListCache(cacheKey, payload);
       res.json(payload);
     } catch (error) {
+      const stale = getListCache(cacheKey, true);
+      if (stale) {
+        console.warn("[mf] BSE list failed, serving stale:", error.message);
+        return res.json(stale);
+      }
       res.status(500).json({ error: "Internal Server Error", details: error.message });
     }
   };
@@ -1021,8 +1104,6 @@ class StarMFController {
       if (!isin && !scheme_code) {
         return res.status(400).json({ status: "error", message: "isin or scheme_code is required" });
       }
-
-      if (!this.accessToken) await this.loginFunc();
 
       const searchBse = async (value) => {
         const reqObj = JSON.parse(JSON.stringify(schemeRequestData.getSchemeMasterList));
@@ -1042,11 +1123,35 @@ class StarMFController {
 
       const needles = [...new Set([isin, scheme_code].filter(Boolean))];
       let scheme = null;
-      for (const value of needles) {
-        const schemesRes = await searchBse(value);
-        scheme = pickScheme(schemesRes?.data?.lists || [], isin, scheme_code);
-        if (scheme) break;
+
+      // This path queries BSE directly rather than through catalogue.js, so it needs the
+      // same AMFI fallback — otherwise every card the AMFI-backed list rendered opens on
+      // "Scheme not found".
+      //
+      // ponytail: checked FIRST when the flag is on. The flag means BSE is known
+      // unreachable (dev box is not IP-whitelisted), and its 21s timeout would otherwise
+      // be paid on every fund page before falling back. Flag off = untouched BSE-only path.
+      if (AMFI_FALLBACK) {
+        const want = needles.map((v) => String(v).trim().toUpperCase());
+        scheme = ((await getAmfiNavs()).schemes || []).find((row) =>
+          want.includes(String(row.scheme_isin || "").toUpperCase()) ||
+          want.includes(String(row.scheme_bse_code || "").toUpperCase())
+        ) || null;
+        if (scheme) console.warn("[mf] AMFI fallback — scheme-details:", scheme.scheme_name);
       }
+
+      if (!scheme) {
+        // Moved down from the top of the handler: logging in to BSE is only worth its
+        // round trip if we are about to query BSE. An AMFI hit above needs no token, and
+        // on an unreachable host that login is a 21s wait on every fund page.
+        if (!this.accessToken) await this.loginFunc();
+        for (const value of needles) {
+          const schemesRes = await searchBse(value);
+          scheme = pickScheme(schemesRes?.data?.lists || [], isin, scheme_code);
+          if (scheme) break;
+        }
+      }
+
       if (!scheme) return res.status(404).json({ status: "error", message: "Scheme not found" });
       const mapped = mapScheme(scheme);
       if (mapped.minSip == null) mapped.minSip = 500;

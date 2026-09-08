@@ -93,6 +93,24 @@ describe("order path end to end", () => {
   });
   after(() => server.close());
 
+  it("refuses a purchase of an admin-hidden scheme, but still allows redeeming it", async () => {
+    const { resetHiddenCache } = require("../src/mf/hidden");
+    resetHiddenCache({ codes: ["007G"] });
+    sent = null;
+
+    const blocked = await post("/purchaseNewOrder", buy());
+    assert.equal(blocked.status, 403);
+    assert.match(blocked.body.message, /not available for investment/);
+    assert.equal(sent, null, "BSE must not be called for a hidden scheme");
+
+    // Hiding a scheme must never trap units an investor already owns.
+    const redeem = await post("/purchaseNewOrder", sell());
+    assert.equal(redeem.status, 200);
+    assert.equal(sent.data.orders[0].scheme, "007G");
+
+    resetHiddenCache();
+  });
+
   it("rejects an unauthenticated buy before touching BSE", async () => {
     sent = null;
     const r = await post("/purchaseNewOrder", buy(), null);
@@ -283,5 +301,90 @@ describe("order path end to end", () => {
     assert.notEqual(r.body.status, "success", "a BSE error must not read as success");
     assert.equal(r.body.message, "Scheme suspended");
     bseResponse = { status: "success", data: { items: [{ id: "ORD1" }] } };
+  });
+});
+
+// KYC verdict endpoint: Laravel calls this with the investor's bearer and writes
+// kyc_status itself. Same harness — auth stub + BSE lookup stubbed on the controller.
+describe("kyc bse-status end to end", () => {
+  // Required inside the hook: the file-level before() must set LARAVEL_INVESTOR_URL
+  // before the controller's config is first read.
+  let controller, record;
+  before(async () => {
+    await boot();
+    controller = require("../src/controllers/StarMFController");
+    controller.lookupUcc = async (ucc) => (ucc === UCC ? record : null);
+  });
+  after(() => server.close());
+
+  it("answers BSE's verdict for the authenticated investor's UCC", async () => {
+    record = {
+      ucc_status: "APPROVED",
+      is_client_demat: true,
+      transaction_ready: [{ mode: "DEMAT", verified_status: "FALSE", verification_failed_reason: "" }],
+    };
+    const r = await post("/kyc/bse-status", { ucc: UCC });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.status, "success");
+    assert.equal(r.body.data.ucc, UCC);
+    assert.equal(r.body.data.ucc_status, "APPROVED");
+    assert.equal(r.body.data.kyc_status, "verified");
+    assert.deepEqual(r.body.data.reasons, []);
+    assert.deepEqual(r.body.data.transaction_ready, record.transaction_ready);
+    assert.ok(!Number.isNaN(Date.parse(r.body.data.checked_at)), "checked_at is an ISO timestamp");
+  });
+
+  it("is 502 when BSE has no record, so Laravel leaves kyc_status alone", async () => {
+    record = null;
+    const r = await post("/kyc/bse-status", { ucc: UCC });
+    assert.equal(r.status, 502);
+    assert.equal(r.body.status, "error");
+    assert.match(r.body.message, /Could not read this UCC from BSE/, "a down BSE and an unknown UCC are the same null — do not claim which");
+  });
+
+  it("refuses another investor's UCC before asking BSE", async () => {
+    let asked = false;
+    controller.lookupUcc = async () => {
+      asked = true;
+      return record;
+    };
+    const r = await post("/kyc/bse-status", { ucc: "ATTACKER1" });
+    assert.equal(r.status, 403);
+    assert.equal(asked, false, "requireMatchingUcc runs before the lookup");
+  });
+
+  it("rejects an unauthenticated call", async () => {
+    const r = await post("/kyc/bse-status", { ucc: UCC }, null);
+    assert.equal(r.status, 401);
+  });
+
+  // The client code is generated in the browser, so BSE's own record decides ownership:
+  // claiming somebody else's APPROVED UCC must not verify this investor's KYC.
+  it("refuses a UCC whose BSE record carries a different PAN", async () => {
+    controller.lookupUcc = async () => ({
+      ucc_status: "APPROVED",
+      holder: [{ identifier: [{ identifier_type: "pan", identifier_number: "ZZZZZ9999Z" }] }],
+    });
+    investorResponse = {
+      status: true,
+      data: { kyc: { ucc_code: UCC }, email: "a@b.com", profile: { pan_number: "ABCDE1234F" } },
+    };
+    const r = await post("/kyc/bse-status", { ucc: UCC });
+    assert.equal(r.status, 403);
+    assert.match(r.body.message, /different PAN/i);
+  });
+
+  it("answers normally when the PANs agree", async () => {
+    controller.lookupUcc = async () => ({
+      ucc_status: "APPROVED",
+      holder: [{ identifier: [{ identifier_type: "pan", identifier_number: "ABCDE1234F" }] }],
+    });
+    const r = await post("/kyc/bse-status", { ucc: UCC });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.data.kyc_status, "verified");
+    investorResponse = {
+      status: true,
+      data: { kyc: { ucc_code: UCC, kyc_status: "verified" }, email: "a@b.com", phone: "9999999999" },
+    };
   });
 });

@@ -15,6 +15,8 @@ router.post("/updateUccAddress", requireInvestor, StarMFController.updateUccAddr
 router.post("/updateUccProfile", requireInvestor, StarMFController.updateUccProfile);
 router.post("/updateUccUpdateBankData", requireInvestor, StarMFController.updateUccUpdateBankData);
 router.post("/deactivateUcc", requireInvestor, StarMFController.deactivateUcc);
+// KYC = BSE's ucc_status. Laravel calls this (bearer forwarded) and writes kyc_status itself.
+router.post("/kyc/bse-status", ...auth, StarMFController.kycBseStatus);
 
 // SIP / XSP
 router.post("/xspRegister", ...auth, StarMFController.xspRegister);
