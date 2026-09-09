@@ -2,6 +2,7 @@ const { mapScheme, isTransactable, matchesCategory } = require("./scheme");
 const { getAmfiNavs } = require("./amfiNav");
 const { navFor, navDateFor } = require("./navStore");
 const { getHidden, isHidden } = require("./hidden");
+const { getCategories, categoryOf } = require("./categories");
 
 // Page size the caller may ask for. BSE ka master khud chunk-chunk aata hai (CHUNK).
 const FETCH_MAX = 100;
@@ -135,12 +136,14 @@ async function coldPage(controller, q, start, length) {
   const navOf = (item) => item.nav ?? navFor(amfi, item.scheme_isin, item.scheme_bse_code);
   const shown = rows.filter((item) => !isHidden(hidden, item));
   const priced = shown.filter((item) => navOf(item) != null);
+  const cats = await getCategories();
   const { lists } = query(priced, { ...q, start: 0, length });
   const list = lists.map((item) => ({
     ...item,
     nav: navOf(item),
     nav_date: item.nav_date || navDateFor(amfi, item.scheme_isin, item.scheme_bse_code),
     nav_loaded: true,
+    admin_category: categoryOf(cats, item),
   }));
 
   return {
@@ -211,12 +214,16 @@ async function getCatalogue(controller, q = {}) {
   // request 28k object allocate karti. Naapa hua kharcha: 28k rows par 2-7 ms CPU,
   // koi network call nahi. Isse zyada chahiye to derived index per-filter cache
   // karna parega, abhi controller ka 5-minute listCache hi kaafi hai.
+  // Admin's classification rides along on the returned page only — it changes far more
+  // often than the master index, so it must not be baked into it.
+  const cats = await getCategories();
   const { total, lists } = query(priced, { ...q, start, length });
   const list = lists.map((item) => ({
     ...item,
     nav: navOf(item),
     nav_date: item.nav_date || navDateFor(amfi, item.scheme_isin, item.scheme_bse_code),
     nav_loaded: true,
+    admin_category: categoryOf(cats, item),
   }));
 
   return {
