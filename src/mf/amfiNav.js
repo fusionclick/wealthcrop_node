@@ -6,7 +6,7 @@ const axios = require("axios");
 const URL = "https://portal.amfiindia.com/spages/NAVAll.txt";
 const TTL_MS = 6 * 60 * 60 * 1000;
 
-let cache = { at: 0, navs: {}, schemes: [] };
+let cache = { at: 0, navs: {}, schemes: [], codes: {} };
 let inflight = null;
 
 const LINE_BREAK = /\r?\n/;
@@ -31,6 +31,32 @@ function parseNavAll(text = "") {
     }
   }
   return navs;
+}
+
+/**
+ * Same file, third view: {ISIN: AMFI scheme code}, read from column 0.
+ *
+ * This is the registry that makes real NAV history possible. mfapi.in is keyed by exactly
+ * this code, so an ISIN we already hold turns into the full published NAV series with no
+ * guessing. The name search it replaces missed whenever BSE and AMFI word a scheme
+ * differently — BSE says "… REGULAR IDCW PAYOUT", AMFI says "… Regular Plan - IDCW", and
+ * mfapi's AND-match on the word "PAYOUT" returned nothing, so the fund silently fell back
+ * to a fabricated straight line.
+ */
+function parseNavCodes(text = "") {
+  const codes = {};
+  for (const line of String(text).split(LINE_BREAK)) {
+    if (!line.includes(";")) continue;
+    const f = line.split(";");
+    if (f.length < 5) continue;
+    const code = String(f[0] || "").trim();
+    if (!/^\d+$/.test(code)) continue; // also skips the "Scheme Code" header row
+    for (const raw of [f[1], f[2]]) {
+      const isin = String(raw || "").trim().toUpperCase();
+      if (isin && isin !== "-") codes[isin] = code;
+    }
+  }
+  return codes;
 }
 
 /**
@@ -92,7 +118,7 @@ async function getAmfiNavs() {
       .then(({ data }) => {
         const navs = parseNavAll(data);
         if (Object.keys(navs).length) {
-          cache = { at: Date.now(), navs, schemes: parseNavSchemes(data) };
+          cache = { at: Date.now(), navs, schemes: parseNavSchemes(data), codes: parseNavCodes(data) };
         }
         return cache;
       })
@@ -107,4 +133,16 @@ async function getAmfiNavs() {
   return inflight;
 }
 
-module.exports = { getAmfiNavs, parseNavAll, parseNavSchemes };
+/** AMFI scheme code for an ISIN, or null. Never throws — a miss just means the caller
+ *  falls back to searching by name. */
+async function amfiCodeForIsin(isin) {
+  const key = String(isin || "").trim().toUpperCase();
+  if (!key) return null;
+  try {
+    return (await getAmfiNavs()).codes?.[key] || null;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { getAmfiNavs, amfiCodeForIsin, parseNavAll, parseNavSchemes, parseNavCodes };

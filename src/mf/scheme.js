@@ -195,15 +195,24 @@ function calcReturns(currentNav, anchors = {}) {
   };
 }
 
-// Last-resort series when no real NAV history is available: interpolate from the
-// known anchors. Flagged `synthetic` in the API so the UI can label it indicative.
+// Last-resort series when no real NAV history is available: interpolate between today's
+// NAV and a KNOWN past return. Flagged `synthetic` so the UI labels it indicative.
 // ponytail: linear, not a random walk — never invent volatility that did not happen.
+//
+// Two ways this used to invent data outright, both removed:
+//   - `Number(null)` is 0, not NaN, so a scheme with no known returns took the "0% CAGR"
+//     branch and drew a dead-flat line across three years at today's NAV. On screen that
+//     reads as a fund that has never moved, which is a stronger claim than "unknown".
+//   - The remaining fallback was a hardcoded 1.12, i.e. a 12% annual return nobody
+//     reported. An empty series and the UI's "NAV chart unavailable" is the honest answer.
 function buildChartSeries(currentNav, returnsPct = {}) {
   if (!currentNav) return [];
+  const raw = returnsPct?.["3Y"] ?? returnsPct?.["1Y"];
+  const cagr = raw == null || raw === "" ? NaN : Number(raw);
+  if (!Number.isFinite(cagr) || cagr <= -100) return [];
   const days = 1095;
   const now = Math.floor(Date.now() / 1000);
-  const cagr = Number(returnsPct["3Y"] ?? returnsPct["1Y"]);
-  const rate = Number.isFinite(cagr) && cagr > -100 ? 1 + cagr / 100 : 1.12;
+  const rate = 1 + cagr / 100;
   const startNav = currentNav / Math.pow(rate, days / 365);
   const out = [];
   for (let i = 0; i <= days; i += 3) {

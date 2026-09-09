@@ -182,7 +182,14 @@ describe("order path end to end", () => {
     assert.equal(r.body.data.count, 1);
     assert.equal(r.body.data.lists.length, 1);
     assert.equal(r.body.data.lists[0].reg_no, "SIP1");
-    assert.deepEqual(sent.data.filter_param, { sxp_type: "SIP", status: "active" });
+    // Ye assert pehle `{ sxp_type: "SIP", status: "active" }` maangta tha. Wo umeed
+    // GALAT thi, test nahi — live BSE (whitelisted box, demo host) par har variant chala
+    // kar dekha: `/sxp_list` `filter_param` mein koi bhi key ho to `invalid_json` deta
+    // hai (sxp_type, status, ucc, member_code — sab), aur executeWithRetry usay 502 bana
+    // deta tha. Khali `filter_param` hi wo shape hai jo success deta hai.
+    assert.deepEqual(sent.data.filter_param, {});
+    // search object ke tor par valid hai aur gateway par narrow karta hai; string bhejna
+    // bhi invalid_json deta hai, is liye shape ka assert bhi zaroori hai.
     assert.deepEqual(sent.data.search, { value: UCC });
     // format/sort_by/sort_dir/is_compressed/freq BSE ko `field is invalid_json` dete
     // thay — koi bhi wapas aaye to ye assert tootega.

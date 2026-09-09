@@ -79,6 +79,26 @@ const bseMessage = (error) => {
   );
 };
 
+const cell = (v) => String(v ?? "").trim();
+
+/**
+ * SIP-vs-everything-else, decided here because BSE will not decide it for us: `/sxp_list`
+ * rejects any `filter_param` key, `sxp_type` included (see buildXspListPayload).
+ *
+ * Fail-open on purpose. The demo book has no XSP rows, so the exact field names are
+ * unconfirmed; a row is dropped only when a field we recognise is present AND clearly says
+ * something else. An unknown shape stays visible — showing an STP by mistake is a cosmetic
+ * bug, hiding somebody's real SIP is not. Confirm the field names against a prod account
+ * with live SIPs and this can tighten.
+ */
+const isActiveSip = (item) => {
+  const type = cell(item?.sxp_type || item?.xsp_type || item?.type);
+  if (type && !/^sip$/i.test(type)) return false;
+  const status = cell(item?.status || item?.sxp_status || item?.xsp_status);
+  if (status && /cancel|close|expire|reject|fail|stop/i.test(status)) return false;
+  return true;
+};
+
 // BSE's SIP-list filters do not accept UCC/member. Search narrows the gateway
 // result, and this final server-side check prevents another investor's row from
 // ever reaching the browser.
@@ -87,12 +107,14 @@ const scopeXspResponse = (response, ucc) => {
   if (!data || typeof data !== "object") return response;
   const key = Array.isArray(data.lists) ? "lists" : Array.isArray(data.items) ? "items" : null;
   if (!key) return response;
-  const expected = String(ucc || "").trim();
-  const rows = data[key].filter((item) =>
-    [item?.ucc, item?.ucc_code, item?.client_code, item?.investor_ucc, item?.investor?.ucc, item?.investor?.client_code]
-      .some((value) => String(value || "").trim() === expected)
+  const expected = cell(ucc);
+  const rows = data[key].filter(
+    (item) =>
+      [item?.ucc, item?.ucc_code, item?.client_code, item?.investor_ucc, item?.investor?.ucc, item?.investor?.client_code]
+        .some((value) => cell(value) === expected) && isActiveSip(item)
   );
-  return { ...response, data: { ...data, [key]: rows, count: rows.length } };
+  // total_count is BSE's pre-filter number; leaving it would overstate what we returned.
+  return { ...response, data: { ...data, [key]: rows, count: rows.length, total_count: rows.length } };
 };
 
 /**
@@ -109,11 +131,26 @@ const scopeXspResponse = (response, ucc) => {
  * nahi hai (sibling getClientPortfolio par bhi yehi kahani likhi hai: galat shakl ka
  * filter = invalid_json).
  *
- * ponytail: `search` isi liye rakha hai ke wo gateway par result narrow karta hai, aur
- * `scopeXspResponse` uske baad bhi UCC par filter karta hai — narrowing fail bhi ho to
- * doosre client ka data browser tak nahi jata. Agar `invalid_json` ab bhi aaye to agla
- * shak isi `search` par hai (sxp_list ke liye unproven); usay hata dena, correctness
- * par koi asar nahi parega, sirf paging tang ho jayegi.
+ * Us note ne agla shak `search` par daala tha. Wo shak GALAT tha. Live BSE (demo host,
+ * whitelisted box) par har variant chala kar dekha gaya:
+ *
+ *   filter_param {sxp_type,status} + search{value}   -> invalid_json
+ *   filter_param {sxp_type,status} + search{}        -> invalid_json
+ *   filter_param {sxp_type,status}, koi search nahi  -> invalid_json
+ *   filter_param {ucc:[..],member_code}              -> invalid_json
+ *   filter_param {}                + search{}        -> success
+ *   filter_param {}                + search{value}   -> success
+ *   filter_param {}                + search:"UCC"    -> invalid_json  (string nahi, object)
+ *
+ * Yaani `/sxp_list` `filter_param` mein KOI key nahi leta — sxp_type, status, ucc,
+ * member_code, sab reject. Isi liye har SIPs page load 502 deta tha. (Sibling
+ * getClientPortfolio ucc/member_code leta hai; wo endpoint alag hai, uska shape yahan
+ * apply nahi hota — wo bhi test kiya aur reject hua.)
+ *
+ * `search: {value: ucc}` object ke tor par valid hai aur gateway par narrow karta hai, is
+ * liye paging ke liye rakha hai. Asli hifazat `scopeXspResponse` hai — narrowing fail bhi
+ * ho jaye to doosre client ki row browser tak nahi jati. sxp_type/status ki chhanti ab
+ * wahin locally hoti hai, kyunki BSE se maangi hi nahi ja sakti.
  */
 const buildXspListPayload = (input, ucc) => ({
   data: {
@@ -123,7 +160,7 @@ const buildXspListPayload = (input, ucc) => ({
     length: Math.min(Math.max(Number(input?.length) || 50, 1), 100),
     fields: ["ALL"],
     count_only: false,
-    filter_param: { sxp_type: "SIP", status: "active" },
+    filter_param: {},
     search: { value: String(ucc || "") },
   },
 });

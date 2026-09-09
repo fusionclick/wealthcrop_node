@@ -18,6 +18,20 @@ describe("getAllXsp payload", () => {
     assert.equal(built.filter_param.freq, undefined, "freq wapas aa gaya");
   });
 
+  it("filter_param bilkul khali — /sxp_list koi bhi key ho to invalid_json deta hai", () => {
+    // Live BSE par har variant chala kar verify kiya: sxp_type, status, ucc, member_code —
+    // har ek akela bhi `invalid_json` laata hai, aur executeWithRetry usay 502 bana deta
+    // hai. Wohi 502 har SIPs page load par aa raha tha. Sirf khali filter_param chalta hai.
+    assert.deepEqual(buildXspListPayload({}, "U1").data.filter_param, {});
+  });
+
+  it("search object hai, string nahi", () => {
+    // `search: "U1"` bhi invalid_json deta hai; sirf {value} shape accept hoti hai.
+    const { search } = buildXspListPayload({}, "U1").data;
+    assert.equal(typeof search, "object");
+    assert.deepEqual(search, { value: "U1" });
+  });
+
   it("koi khali string value nahi — BSE unhe enum nahi manta", () => {
     const { data } = buildXspListPayload({ start: 0, length: 50 }, "U1");
     const empties = [];
@@ -63,6 +77,27 @@ describe("scopeXspResponse", () => {
     const r = scopeXspResponse(rows([{ ucc: "B2" }, { ucc: "C3" }]), "A1");
     assert.deepEqual(r.data.lists, []);
     assert.equal(r.data.count, 0);
+  });
+
+  it("SIP ki chhanti ab yahan hoti hai, kyunki BSE se maangi nahi ja sakti", () => {
+    const r = scopeXspResponse(
+      rows([
+        { ucc: "A1", id: 1, sxp_type: "SIP", status: "ACTIVE" },
+        { ucc: "A1", id: 2, sxp_type: "STP", status: "ACTIVE" },
+        { ucc: "A1", id: 3, sxp_type: "SIP", status: "CANCELLED" },
+        { ucc: "A1", id: 4, sxp_type: "SIP", status: "Expired" },
+      ]),
+      "A1"
+    );
+    assert.deepEqual(r.data.lists.map((x) => x.id), [1]);
+    assert.equal(r.data.total_count, 1, "BSE ka pre-filter total wapas nahi jana chahiye");
+  });
+
+  it("anjaan shape par fail-open — kisi ki asli SIP chhupti nahi", () => {
+    // Demo book khali hai, is liye asli field naam confirm nahi hue. Row sirf tab girti
+    // hai jab koi pehchani hui field maujood ho aur saaf mukhalif ho.
+    const r = scopeXspResponse(rows([{ ucc: "A1", id: 1 }, { ucc: "A1", id: 2, status: "ACTIVE" }]), "A1");
+    assert.deepEqual(r.data.lists.map((x) => x.id), [1, 2]);
   });
 
   it("anjaan shape ko chhoota nahi", () => {

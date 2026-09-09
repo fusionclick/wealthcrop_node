@@ -1,5 +1,6 @@
 const axios = require("axios");
 const { parseNavRows, calcReturnsFromSeries, chartFromSeries, avgReturns, rankInPeers } = require("./scheme");
+const { amfiCodeForIsin } = require("./amfiNav");
 
 const http = axios.create({ timeout: 20000 });
 const cache = new Map();
@@ -44,8 +45,29 @@ async function getHistory(code) {
   });
 }
 
+/**
+ * ISIN → the mfapi.in scheme whose NAV history we want.
+ *
+ * Order matters. AMFI's NAVAll.txt — already downloaded for prices — is the registry that
+ * maps every live ISIN to its scheme code, and mfapi.in is keyed by that same code. The
+ * exact lookup therefore costs no extra network call and cannot mis-hit.
+ *
+ * The name search stays only as a fallback for an ISIN AMFI has not listed yet (a new
+ * scheme, an NFO). It is a guess: mfapi's search AND-matches every word, so one wording
+ * difference between BSE and AMFI returns nothing. That is what used to happen — BSE's
+ * "SBI ESG EXCLUSIONARY STRATEGY FUND REGULAR IDCW PAYOUT" became the query "SBI ESG
+ * EXCLUSIONARY STRATEGY PAYOUT", AMFI never writes "PAYOUT", zero hits, and the fund page
+ * drew a fabricated flat line instead of the 5,020 real NAVs that were sitting there.
+ */
 async function resolveScheme(isin, name) {
   const needle = String(isin || "").trim().toUpperCase();
+
+  const amfiCode = await amfiCodeForIsin(needle);
+  if (amfiCode) {
+    const latest = await getLatest(amfiCode);
+    if (latest?.meta) return { code: amfiCode, meta: latest.meta, latest };
+  }
+
   const q = searchQuery(name, isin);
   const hits = await searchSchemes(q);
   for (const h of hits.slice(0, 2)) {

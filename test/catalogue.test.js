@@ -29,6 +29,36 @@ describe("amfi nav feed", () => {
     assert.deepEqual(parseNavAll(text), { INFGOOD: { nav: 55.5, date: "24-Aug-2026" } });
     assert.deepEqual(parseNavAll(""), {});
   });
+
+  it("indexes ISIN -> AMFI scheme code, which is what buys real NAV history", () => {
+    const { parseNavCodes } = require("../src/mf/amfiNav");
+    // The exact row that used to defeat the name search: BSE writes this scheme as
+    // "... REGULAR IDCW PAYOUT", AMFI as "Regular Plan / IDCW", so mfapi's AND-match on
+    // the word "PAYOUT" found nothing and the chart fell back to a fabricated line.
+    // Both ISINs on the row must resolve to the same code — the payout ISIN is the one
+    // BSE hands us, and only the code reaches mfapi.
+    const text = [
+      "Scheme Code;ISIN Div Payout/ ISIN Growth;ISIN Div Reinvestment;Scheme Name;Plan;Option;Net Asset Value;Date",
+      "101295;INF200K01198;INF200K01206;SBI ESG Exclusionary Strategy Fund;Regular Plan;IDCW;73.9607;08-Sep-2026",
+      "Open Ended Schemes(Equity Scheme)",
+      "9;-;-;No ISIN Fund;10.0;08-Sep-2026",
+    ].join("\n");
+    const codes = parseNavCodes(text);
+    assert.equal(codes.INF200K01198, "101295");
+    assert.equal(codes.INF200K01206, "101295");
+    assert.equal(Object.keys(codes).length, 2, "header, section banner and the ISIN-less row are skipped");
+    assert.deepEqual(parseNavCodes(""), {});
+  });
+
+  it("amfiCodeForIsin answers blank input without reaching the network", async () => {
+    // Only the pre-network guards are asserted here: amfiCodeForIsin calls the module's
+    // own getAmfiNavs, so an outside stub cannot intercept it, and a real lookup would
+    // make this a network test. The mapping itself is covered by parseNavCodes above.
+    const { amfiCodeForIsin } = require("../src/mf/amfiNav");
+    assert.equal(await amfiCodeForIsin(""), null);
+    assert.equal(await amfiCodeForIsin(null), null);
+    assert.equal(await amfiCodeForIsin("   "), null);
+  });
 });
 
 describe("catalogue", () => {

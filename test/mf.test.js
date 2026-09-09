@@ -34,6 +34,17 @@ describe("catalogue", () => {
     assert.ok(series[0].nav < series[series.length - 1].nav);
     assert.equal(series[series.length - 1].nav, 100);
     assert.deepEqual(buildChartSeries(null), []);
+    // The flat-line bug: `Number(null)` is 0, so a scheme with no known returns used to
+    // take the "0% CAGR" branch and draw 1095 days of the same NAV — a fund page claiming
+    // the NAV had not moved in three years. Nothing known => draw nothing.
+    assert.deepEqual(buildChartSeries(73.96, { "1Y": null, "3Y": null, "5Y": null }), []);
+    assert.deepEqual(buildChartSeries(73.96, {}), []);
+    assert.deepEqual(buildChartSeries(73.96, { "3Y": "" }), []);
+    assert.deepEqual(buildChartSeries(73.96, { "3Y": -100 }), []);
+    // A real 0% return is a fact, not a gap, so it may still draw flat.
+    assert.equal(new Set(buildChartSeries(50, { "3Y": 0 }).map((p) => p.nav)).size, 1);
+    // 1Y is used only when 3Y is genuinely absent.
+    assert.ok(buildChartSeries(100, { "3Y": null, "1Y": 10 }).length > 2);
     const { chartFromSeries } = require("../src/mf/scheme");
     assert.equal(chartFromSeries(series).length, series.length);
     assert.equal(mapScheme({ scheme_name: "ICICI ELSS Tax Saver", scheme_category: "Not Specified" }).subType, "Equity • ELSS");
