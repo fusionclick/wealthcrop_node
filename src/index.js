@@ -6,6 +6,7 @@ const cors = require("cors");
 const dns = require("dns");
 const rootRoute = require("./route/root-route/rootRoute");
 const StarMFController = require("./controllers/StarMFController");
+const { warmCatalogue } = require("./mf/catalogue");
 const { attachNavSocket } = require("./mf/navSocket");
 
 if (typeof dns.setDefaultResultOrder === "function") {
@@ -71,4 +72,8 @@ const server = http.createServer(app);
 attachNavSocket(server, StarMFController);
 server.listen(port, () => {
   console.log(`WealthCrop BSE proxy listening on port ${port}`);
+  // ponytail: master index warm kar lo. Build ~5.8 minute ka hai; iske bina pehla investor
+  // hi wo intezar shuru karta hai (usay cold page milta hai, par catalogue-wide totals tab
+  // tak nahi). Fail ho jaye to koi baat nahi — getCatalogue khud dobara try karta hai.
+  warmCatalogue(StarMFController).catch(() => {});
 });

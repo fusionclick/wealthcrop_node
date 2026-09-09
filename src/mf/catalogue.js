@@ -271,4 +271,16 @@ function query(list = [], { search = "", category = "", isin = "", scheme_code =
   return { total: rows.length, lists: rows.slice(start, start + length) };
 }
 
-module.exports = { getCatalogue, query, AMFI_FALLBACK };
+/**
+ * Boot warm-up. Builds the index before anyone asks, so the first investor is not the one
+ * who starts a ~5.8 minute build. Safe to fail: getCatalogue retries on its own.
+ */
+async function warmCatalogue(controller) {
+  if (!controller.accessToken) await controller.loginFunc();
+  if (!controller.accessToken) return;
+  const t0 = Date.now();
+  const index = await getMaster(controller);
+  console.log(`[mf] master index warm: ${index.list.length} schemes in ${Date.now() - t0}ms`);
+}
+
+module.exports = { getCatalogue, query, warmCatalogue, AMFI_FALLBACK };
