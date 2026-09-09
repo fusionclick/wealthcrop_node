@@ -79,8 +79,13 @@ describe("catalogue", () => {
 
     const c = controller(20);
     const cat = await getCatalogue(c, { start: 0, length: 20 });
-    assert.equal(c.pages(), 1, "one BSE page — full master OOMs production");
-    assert.equal(cat.total, 5, "counts everything BSE returned");
+    assert.equal(c.pages(), 1, "master fits one chunk here; raw rows are dropped after mapping");
+    // Pehle yahan 5 tha — BSE ka apna count, yaani wo schemes bhi ginta tha jo backend
+    // list se nikaal deta hai. Ab `total` filter ke BAAD ki ginti hai, is liye wahi 2
+    // jo neeche list mein bhi hain: matured/blocked/unpriced rows count se bhi bahar.
+    assert.equal(cat.total, 2, "total counts what the user actually gets");
+    assert.equal(cat.total, cat.list.length, "no phantom rows behind the page count");
+    assert.equal(cat.fetched, 4, "transactable master size stays visible for debugging");
 
     const names = cat.list.map((f) => f.name);
     assert.ok(names.includes("LIVE GROWTH FUND"), "AMFI-priced scheme kept");
@@ -212,7 +217,10 @@ describe("catalogue filters", () => {
     assert.equal(sipAllowed({}), null);
     assert.equal(planOf({ scheme_plan: "DIRECT" }), "Direct");
     assert.equal(planOf({ scheme_name: "HDFC Flexi Cap - Regular Plan - Growth" }), "Regular");
-    assert.equal(planOf({ scheme_name: "HDFC Flexi Cap" }), null);
+    // Pehle null tha, aur null wali scheme Regular aur Direct DONO filters se gayab
+    // ho jati thi. Direct plan ka naam mein "Direct" likhna lazmi hai, is liye bina
+    // lafz wali scheme Regular hai.
+    assert.equal(planOf({ scheme_name: "HDFC Flexi Cap" }), "Regular");
 
     const physical = mapScheme({
       scheme_name: "Franklin Pension Plan",
@@ -226,6 +234,85 @@ describe("catalogue filters", () => {
     assert.equal(physical.physical_only, true);
     assert.equal(mapScheme({ scheme_name: "X" }).physical_only, false);
     });
+});
+
+describe("catalogue-wide filtering", () => {
+  const amfiMod = require("../src/mf/amfiNav");
+  const realGet = amfiMod.getAmfiNavs;
+
+  // 50 schemes, 20 Direct + 20 Regular + 10 bina plan lafz ke. Ek page 20 ka hai, is
+  // liye har filter ka sach page se bahar hai — purana code sirf pehla page filter
+  // karta tha aur `total` BSE ka poora count deta tha.
+  const schemes = Array.from({ length: 50 }, (_, i) => {
+    const plan = i < 20 ? " Direct Plan" : i < 40 ? " Regular Plan" : "";
+    return {
+      scheme_name: `FUND ${String(i).padStart(2, "0")}${plan}`,
+      scheme_isin: `INFTEST${String(i).padStart(2, "0")}`,
+      scheme_bse_code: `T${i}-GR`,
+      systematic: [{ sip_flag: i % 2 === 0 ? "Y" : "N" }],
+    };
+  });
+
+  async function catalogue() {
+    amfiMod.getAmfiNavs = async () => ({
+      at: Date.now(),
+      navs: Object.fromEntries(schemes.map((s) => [s.scheme_isin, { nav: 10, date: "24-Aug-2026" }])),
+    });
+    delete require.cache[require.resolve("../src/mf/navStore")];
+    delete require.cache[require.resolve("../src/mf/catalogue")];
+    let calls = 0;
+    const controller = {
+      calls: () => calls,
+      accessToken: "t",
+      loginFunc: async () => {},
+      masterDataService: {
+        getSchemeMasterList: async (_t, r) => {
+          calls++;
+          const { start, length } = r.data;
+          return { data: { count: schemes.length, lists: schemes.slice(start, start + length) } };
+        },
+      },
+    };
+    return { controller, mf: require("../src/mf/catalogue") };
+  }
+
+  it("filters the whole catalogue and reports a total the page count can trust", async () => {
+    const { controller, mf } = await catalogue();
+    try {
+      const direct = await mf.getCatalogue(controller, { start: 0, length: 20, plan: "direct" });
+      assert.equal(direct.total, 20, "all 20 Direct schemes counted, not just the ones on page 1");
+      assert.equal(direct.list.length, 20);
+      assert.ok(direct.list.every((f) => f.plan === "Direct"));
+
+      // Regular = 20 labelled + 10 bina lafz wale. Purana planOf null deta tha aur ye
+      // 10 dono filters se gayab thin.
+      const regular = await mf.getCatalogue(controller, { start: 0, length: 20, plan: "regular" });
+      assert.equal(regular.total, 30, "unlabelled schemes count as Regular, not as nothing");
+      assert.equal(regular.list.length, 20, "page is still 20 rows");
+
+      // Page 2 of the FILTERED set — pehle yahan BSE ke start=20 ka raw page aata tha.
+      const page2 = await mf.getCatalogue(controller, { start: 20, length: 20, plan: "regular" });
+      assert.equal(page2.total, 30, "total does not move between pages");
+      assert.equal(page2.list.length, 10, "last page carries the remainder, not empties");
+      const names = new Set([...regular.list, ...page2.list].map((f) => f.name));
+      assert.equal(names.size, 30, "pages do not overlap");
+
+      // Har scheme ka koi na koi plan hai — koi row dono filters se bahar nahi.
+      const all = await mf.getCatalogue(controller, { start: 0, length: 100 });
+      assert.equal(all.total, direct.total + regular.total, "Direct + Regular = the whole catalogue");
+
+      const sip = await mf.getCatalogue(controller, { start: 0, length: 20, sip: "yes" });
+      assert.equal(sip.total, 25, "SIP filter counts across the catalogue too");
+      assert.ok(sip.list.every((f) => f.sip_allowed === true));
+
+      // Ek hi master build, phir har request usi index par — 6 requests, 1 BSE call.
+      assert.equal(controller.calls(), 1, "master is fetched once and reused");
+    } finally {
+      amfiMod.getAmfiNavs = realGet;
+      delete require.cache[require.resolve("../src/mf/navStore")];
+      delete require.cache[require.resolve("../src/mf/catalogue")];
+    }
+  });
 });
 
 describe("hidden schemes", () => {

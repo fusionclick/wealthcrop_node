@@ -5,7 +5,7 @@ const StarMFService = require("bse-starmfv2-sdk");
 const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
-const { getCatalogue, query, AMFI_FALLBACK } = require("../mf/catalogue");
+const { getCatalogue, AMFI_FALLBACK } = require("../mf/catalogue");
 const { getHidden, isHidden } = require("../mf/hidden");
 const { getAmfiNavs } = require("../mf/amfiNav");
 const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE } = require("../mf/order");
@@ -1059,10 +1059,11 @@ class StarMFController {
     if (cached) return res.json(cached);
 
     try {
-      const { list, total: fetched, unpriced, fields, sample } = await getCatalogue(this, q);
-      // Page already comes from BSE; only filter this page (don't re-slice start).
-      const { lists } = query(list, { category: q.category, isin: q.isin, scheme_code: q.scheme_code, plan: q.plan, sip: q.sip, mode: q.mode, start: 0, length: q.length });
-      const total = fetched || lists.length;
+      // getCatalogue poore cached master par filter lagata hai aur page uske BAAD kaatta
+      // hai — `total` filter ke baad ki ginti hai, is liye frontend ka page count sach
+      // bolta hai. Yahan dobara query() nahi: wo page ko dobara filter kar ke total
+      // aur rows ko alag kar deta tha.
+      const { list: lists, total, priced, fetched, unpriced, fields, sample } = await getCatalogue(this, q);
       const lookedUp = q.search || q.isin || q.scheme_code || q.category;
       if (!lists.length && !fetched && !lookedUp) {
         // stale-if-error: kal ka catalogue dikhana 502 se behtar hai.
@@ -1079,7 +1080,7 @@ class StarMFController {
           length: q.length,
           // Every scheme in `lists` is priced; `unpriced` are matured/wound-up
           // schemes dropped from the catalogue, surfaced here for observability.
-          catalogue: { priced: list.length, fetched, unpriced, fields, sample },
+          catalogue: { priced, fetched, unpriced, fields, sample },
           lists,
         },
       };

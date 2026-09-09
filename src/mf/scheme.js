@@ -111,11 +111,13 @@ function sipAllowed(scheme = {}) {
 // Direct = investor seedha AMC se khareedta hai (koi commission nahi). Regular = distributor
 // ke through, trail commission isi par milta hai. BSE `scheme_plan` bhejta hai; khali ho to
 // naam mein hamesha likha hota hai.
+// ponytail: koi lafz na mile to "Regular" — null dene se scheme Regular aur Direct
+// DONO filters se gayab ho jati thi. SEBI ke tehat Direct plan ka naam mein "Direct"
+// likhna lazmi hai; Regular wale aksar lafz likhte hi nahi (jaise "HDFC Flexi Cap").
+// Is liye "koi lafz nahi" ka sahi jawab Regular hai, "pata nahi" nahi.
 function planOf(scheme = {}) {
   const hay = `${scheme.scheme_plan || ""} ${scheme.name || scheme.scheme_name || ""}`;
-  if (/\bdirect\b/i.test(hay)) return "Direct";
-  if (/\bregular\b/i.test(hay)) return "Regular";
-  return null;
+  return /\bdirect\b/i.test(hay) ? "Direct" : "Regular";
 }
 
 function mapScheme(scheme = {}, index = 0) {
