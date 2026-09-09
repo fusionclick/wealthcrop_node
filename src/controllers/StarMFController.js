@@ -11,6 +11,7 @@ const { getAmfiNavs } = require("../mf/amfiNav");
 const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE } = require("../mf/order");
 const { kycFromUcc, uccPan, investorPan } = require("../mf/kyc");
 const { buildXspRegisterPayload, validateSip } = require("../mf/xsp");
+const { mapBseErrors } = require("../mf/bseFieldErrors");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
 const xspRequestData = require("../requestData/xspRequestData");
@@ -499,27 +500,21 @@ class StarMFController {
           console.error("BSE ERROR DETAILS AFTER RETRY:", JSON.stringify(retryError.response?.data, null, 2));
           const retryBseMessages = retryError.response?.data?.messages || [];
           if (retryBseMessages.length > 0) {
-            const BSE_ERROR_MAP = {
-              526: { field: 'address.line1', message: 'Address line 1 is too short — minimum 8 characters required', fix: 'Enter a more detailed address' },
-              560: { field: 'address.pincode', message: 'Invalid pincode — this postal code does not exist in India', fix: 'Use a valid 6-digit India pincode' },
-            };
-            const mappedErrors = retryBseMessages.map(msg => BSE_ERROR_MAP[msg.msgid] || { field: msg.field, message: msg.errcode, fix: 'Check the field and try again' });
-            return res.status(400).json({ error: 'BSE validation failed', errors: mappedErrors, raw: retryBseMessages });
+            // Same mapper as the non-retry path below — this branch had its own slightly
+            // different copy of the table, which is how the two drifted apart.
+            return res.status(400).json({ error: 'BSE validation failed', errors: mapBseErrors(retryBseMessages), raw: retryBseMessages });
           }
           return res.status(500).json({ error: 'Failed to add UCC at BSE Demo after retry', details: retryError.response?.data || retryError.message });
         }
       }
       console.error("BSE ERROR DETAILS:", JSON.stringify(error.response?.data, null, 2));
 
-      // T1.9 — Map BSE error codes to user-friendly messages
+      // T1.9 — Map BSE error codes to user-friendly messages. See src/mf/bseFieldErrors.js:
+      // keyed by errcode as well as msgid (alpha_special arrives as msgid 0), and it falls
+      // back to BSE's own explanation in vals[0] rather than printing the raw code.
       const bseMessages = error.response?.data?.messages || [];
       if (bseMessages.length > 0) {
-        const BSE_ERROR_MAP = {
-          526: { field: 'address.line1', message: 'Address line 1 is too short — minimum 8 characters required', fix: 'Enter a more detailed address (e.g. "Flat 12, Green Park Society")' },
-          560: { field: 'address.pincode', message: 'Invalid pincode — this postal code does not exist in India', fix: 'Use a valid 6-digit India pincode (e.g. 700091)' },
-        };
-        const mappedErrors = bseMessages.map(msg => BSE_ERROR_MAP[msg.msgid] || { field: msg.field, message: msg.errcode, fix: 'Check the field and try again' });
-        return res.status(400).json({ error: 'BSE validation failed', errors: mappedErrors, raw: bseMessages });
+        return res.status(400).json({ error: 'BSE validation failed', errors: mapBseErrors(bseMessages), raw: bseMessages });
       }
 
       res.status(500).json({ error: 'Failed to add UCC at BSE Demo', details: error.response?.data || error.message });
