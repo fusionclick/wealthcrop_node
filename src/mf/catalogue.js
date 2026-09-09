@@ -65,6 +65,8 @@ const MASTER_TTL_MS = 6 * 60 * 60 * 1000;
 const MAX_CHUNKS = 400;
 // How long a cold request waits for the index before falling back to a single BSE page.
 const COLD_WAIT_MS = 2500;
+// A partial index is served but re-tried on this cadence instead of the full TTL.
+const PARTIAL_RETRY_MS = 5 * 60 * 1000;
 
 let master = { at: 0, list: [], fields: [] };
 let masterInflight = null;
@@ -77,11 +79,14 @@ async function buildMaster(controller) {
   // chupchaap adhoora reh jata. Is liye jo usne asal mein bheja wahi aage ka chunk hai.
   let chunk = CHUNK;
   let start = 0;
+  let reported = null;
   for (let i = 0; i < MAX_CHUNKS; i++) {
     const res = await fetchPage(controller, start, chunk);
     const rows = res?.data?.lists || [];
     if (!rows.length) break;
-    if (i === 0 && rows.length < chunk) chunk = rows.length;
+    // Adapt on ANY short page, not just the first: BSE can shrink the page mid-stream, and
+    // "shrank" then read as "finished", committing a truncated catalogue for 6 hours.
+    if (rows.length < chunk) chunk = rows.length;
     if (!fields.length) fields = Object.keys(rows[0]);
     // ponytail: physical-only schemes ab list mein rehti hain aur `physical_only` par
     // badge dikhta hai — chhupane se investor ko pata hi nahi chalta ke fund mojood hai.
@@ -89,11 +94,18 @@ async function buildMaster(controller) {
     // rok MutualFundInvestPage ke `dematBlocked` par hai, list par nahi.
     for (const row of rows) if (isTransactable(row)) list.push(mapScheme(row, list.length));
     const count = Number(res?.data?.count);
+    if (Number.isFinite(count)) reported = count;
     start += rows.length;
-    if (rows.length < chunk) break;
     if (Number.isFinite(count) && start >= count) break;
   }
-  return { at: Date.now(), list, fields };
+  // A truncated index silently hides funds and makes `total` wrong. Serving what we have
+  // still beats an empty catalogue, so don't throw — but say so, and back-date `at` so the
+  // next request retries in minutes instead of sitting on a partial list for six hours.
+  const partial = reported != null && start < reported;
+  if (partial) {
+    console.warn(`[mf] master build stopped at ${start} of ${reported} rows — serving a partial catalogue, retrying soon`);
+  }
+  return { at: partial ? Date.now() - MASTER_TTL_MS + PARTIAL_RETRY_MS : Date.now(), list, fields };
 }
 
 /** Mapped, transactable master. Refreshed at most once per TTL, one build at a time. */
@@ -102,7 +114,9 @@ async function getMaster(controller) {
   if (fresh) return master;
   if (!masterInflight) {
     masterInflight = buildMaster(controller)
-      .then((next) => (master = next))
+      // An empty build must never replace a good index: doing so put a stale-but-usable
+      // catalogue back to zero and sent the next request into a full ~6 minute await.
+      .then((next) => (next.list.length ? (master = next) : master))
       .catch((err) => {
         // Purana index dikhana 502 se behtar — master roz mushkil se badalta hai. Bilkul
         // khali ho to error upar jaye, taake AMFI fallback / stale-cache chal sakein.

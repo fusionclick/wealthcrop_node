@@ -50,8 +50,9 @@ router.post("/getExchPgService", ...auth, StarMFController.getExchPgService);
 router.post("/sendPaymentInfo", ...auth, StarMFController.sendPaymentInfo);
 
 // MIS
-router.post("/uploadMis", StarMFController.uploadMis);
-router.post("/getMisDetails", StarMFController.getMisDetails);
+// ponytail: payment reporting hai — baaki Payments block ki tarah ...auth.
+router.post("/uploadMis", ...auth, StarMFController.uploadMis);
+router.post("/getMisDetails", ...auth, StarMFController.getMisDetails);
 
 // Schemes & NAV
 router.post("/master-scheme-list", StarMFController.getSchemeMasterList);
@@ -60,16 +61,24 @@ router.post("/getNavMasterList", StarMFController.getNavMasterList);
 router.post("/getSchemeReturns", StarMFController.getSchemeReturns);
 
 // NFT
-router.post("/nftBankAccountChange", StarMFController.nftBankAccountChange);
-router.post("/nftNomineeChange", StarMFController.nftNomineeChange);
-router.post("/nftContactChange", StarMFController.nftContactChange);
+// ponytail: ye investor ka bank/nominee/contact BSE par badalte hain — file ke har
+// dusre mutating route ki tarah ...auth. Handler filhaal req.body padhta hi nahi
+// (controller par note), guard phir bhi ab lagta hai taake wire hone par UCC
+// binding pehle se maujood ho.
+router.post("/nftBankAccountChange", ...auth, StarMFController.nftBankAccountChange);
+router.post("/nftNomineeChange", ...auth, StarMFController.nftNomineeChange);
+router.post("/nftContactChange", ...auth, StarMFController.nftContactChange);
 
 // 2FA
 router.post("/get2FAUccNom", requireInvestor, StarMFController.get2FAUccNom);
 router.post("/get2FAUccElog", requireInvestor, StarMFController.get2FAUccElog);
-router.post("/get2FAVerifyMandateCancel", StarMFController.get2FAVerifyMandateCancel);
-router.post("/get2FAVerifySxpReg", StarMFController.get2FAVerifySxpReg);
-router.post("/get2FAVerifyOrderCancel", StarMFController.get2FAVerifyOrderCancel);
+// ponytail: ye 2FA link wahi action kholta hai jo khud ...auth ke peeche hai
+// (cancelMandate / xspRegister / cancelPurchaseOrder) — link bhi utna hi guarded ho.
+// UccNom/UccElog upar sirf requireInvestor par isliye hain ke wo apna UCC
+// req.investor se khud nikalte hain; ye teeno kuch nahi nikalte.
+router.post("/get2FAVerifyMandateCancel", ...auth, StarMFController.get2FAVerifyMandateCancel);
+router.post("/get2FAVerifySxpReg", ...auth, StarMFController.get2FAVerifySxpReg);
+router.post("/get2FAVerifyOrderCancel", ...auth, StarMFController.get2FAVerifyOrderCancel);
 
 // Mandates
 router.post("/registerMandate", ...auth, StarMFController.registerMandate);

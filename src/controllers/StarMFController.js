@@ -1063,7 +1063,7 @@ class StarMFController {
       // hai — `total` filter ke baad ki ginti hai, is liye frontend ka page count sach
       // bolta hai. Yahan dobara query() nahi: wo page ko dobara filter kar ke total
       // aur rows ko alag kar deta tha.
-      const { list: lists, total, priced, fetched, unpriced, fields, sample } = await getCatalogue(this, q);
+      const { list: lists, total, priced, fetched, unpriced, fields, sample, warming } = await getCatalogue(this, q);
       const lookedUp = q.search || q.isin || q.scheme_code || q.category;
       if (!lists.length && !fetched && !lookedUp) {
         // stale-if-error: kal ka catalogue dikhana 502 se behtar hai.
@@ -1081,10 +1081,17 @@ class StarMFController {
           // Every scheme in `lists` is priced; `unpriced` are matured/wound-up
           // schemes dropped from the catalogue, surfaced here for observability.
           catalogue: { priced, fetched, unpriced, fields, sample },
+          // True only while the master index is still building: `total` is then this page's
+          // own row count, not the catalogue's. Dropping this flag was what let the
+          // warm-up page look like an authoritative answer.
+          warming: warming === true,
           lists,
         },
       };
-      setListCache(cacheKey, payload);
+      // A warm-up page must not be cached — 5 minutes normally, and up to 24h as
+      // stale-if-error. Caching it would keep serving a 20-row "whole catalogue" long
+      // after the real index had landed.
+      if (!warming) setListCache(cacheKey, payload);
       res.json(payload);
     } catch (error) {
       const stale = getListCache(cacheKey, true);
@@ -1212,6 +1219,10 @@ class StarMFController {
 
   // NFT Service Method
 
+  // ponytail: teeno handler req.body dekhte hi nahi — nftRequestData ka hardcoded
+  // sample payload seedha BSE ko jata hai. Yaani endpoint request se wired nahi hai:
+  // asli bank/nominee/contact change karne se pehle body -> reqObj mapping likhni
+  // padegi. Route ...auth par hai, magar guard is gap ko bharta nahi.
   nftBankAccountChange = async (req, res) => {
     let reqObj = nftRequestData.nftBankAccountChange;
     return this.handleNFTRequest("nftBankAccountChange", reqObj, res);
