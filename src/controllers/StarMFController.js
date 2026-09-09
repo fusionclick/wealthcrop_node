@@ -36,17 +36,33 @@ const BSE_ERRCODES = {
   required: "is required",
   invalid: "is invalid",
   not_allowed: "is not allowed",
+  id_not_exist: "is not recognised by BSE",
 };
 // Kuch field aise hain jinka errcode bhi kuch nahi batata — inka poora jumla likha hai.
 const BSE_FIELDS = {
   phys_ucc:
     "This scheme can only be held physically, but your BSE account is registered for demat only. Ask support to register it for both.",
 };
+/**
+ * field + errcode together, where the code alone is misleading.
+ *
+ * `ucc / id_not_exist` reads as "no such UCC", and that is not what happened: get_ucc
+ * returns the record perfectly well. BSE refuses the order because the UCC is still
+ * PENDING_VERIFICATION — it exists but is not yet cleared to transact. Verified against
+ * the live host: MIN2082973 answers PENDING_VERIFICATION on get_ucc and id_not_exist
+ * (msgid 505) on order_new, while USRWC56442, which is ACTIVE, places orders fine.
+ */
+const BSE_FIELD_CODES = {
+  "ucc:id_not_exist":
+    "Your BSE account is not approved for transactions yet. BSE has registered your UCC but has not activated it, so orders cannot be placed until it does.",
+};
 const bseMessages = (r) =>
   (Array.isArray(r?.messages) ? r.messages : [])
     .map((m) => {
       if (m?.message || m?.msg) return String(m.message || m.msg);
       const field = String(m?.field || "field").split(".").pop();
+      const pair = BSE_FIELD_CODES[`${field}:${String(m?.errcode || "")}`];
+      if (pair) return pair;
       if (BSE_FIELDS[field]) return BSE_FIELDS[field];
       const code = String(m?.errcode || "invalid");
       const base = `${field} ${BSE_ERRCODES[code] || `is ${code}`}`;
@@ -1831,3 +1847,4 @@ module.exports.bseMessage = bseMessage;
 module.exports.bseFailure = bseFailure;
 module.exports.buildXspListPayload = buildXspListPayload;
 module.exports.scopeXspResponse = scopeXspResponse;
+module.exports.bseMessages = bseMessages;
