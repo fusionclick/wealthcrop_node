@@ -141,3 +141,8 @@ vite.config.ts.timestamp-*
 .vite/
 config.bat
 
+
+# Local env — never commit
+.env
+.env.*
+!.env.example
