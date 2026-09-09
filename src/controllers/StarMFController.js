@@ -10,6 +10,7 @@ const { getHidden, isHidden } = require("../mf/hidden");
 const { getAmfiNavs } = require("../mf/amfiNav");
 const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE } = require("../mf/order");
 const { kycFromUcc, uccPan, investorPan } = require("../mf/kyc");
+const { buildXspRegisterPayload, validateSip } = require("../mf/xsp");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
 const xspRequestData = require("../requestData/xspRequestData");
@@ -821,7 +822,28 @@ class StarMFController {
 
   // XSP Methods
   xspRegister = async (req, res) => {
-    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.xspRegisterData;
+    // Was: `req.body` forwarded to BSE untouched. That let the browser name its own UCC —
+    // the same hole bindUcc closes for orders — and it was also why registration never
+    // worked: the page sent a hardcoded member code and a blank src_scheme. Build it here.
+    const ucc = req.ucc || investorUcc(req.investor);
+    if (!ucc) return res.status(400).json({ status: "error", message: "No UCC on this account" });
+
+    const input = req.body?.data || req.body || {};
+    const scheme = String(input.scheme || input.src_scheme || "").trim();
+    const invalid = validateSip({ ...input, scheme });
+    if (invalid) return res.status(400).json({ status: "error", message: invalid });
+
+    const kyc = req.investor?.kyc || {};
+    const reqObj = buildXspRegisterPayload(
+      { ...input, scheme },
+      {
+        ucc,
+        memberCode: this.memberCode,
+        email: req.investor?.email || "",
+        dpId: kyc.dp_id,
+        clientId: kyc.client_id,
+      }
+    );
     return this.handleTrxnRequest("xspRegister", reqObj, res);
   };
   getXsp = async (req, res) => {
