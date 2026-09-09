@@ -62,6 +62,8 @@ const CHUNK = 2000;
 const MASTER_TTL_MS = 6 * 60 * 60 * 1000;
 // 28k rows at the smallest page BSE has ever served us still finishes inside this.
 const MAX_CHUNKS = 400;
+// How long a cold request waits for the index before falling back to a single BSE page.
+const COLD_WAIT_MS = 2500;
 
 let master = { at: 0, list: [], fields: [] };
 let masterInflight = null;
@@ -95,7 +97,8 @@ async function buildMaster(controller) {
 
 /** Mapped, transactable master. Refreshed at most once per TTL, one build at a time. */
 async function getMaster(controller) {
-  if (master.list.length && Date.now() - master.at < MASTER_TTL_MS) return master;
+  const fresh = master.list.length && Date.now() - master.at < MASTER_TTL_MS;
+  if (fresh) return master;
   if (!masterInflight) {
     masterInflight = buildMaster(controller)
       .then((next) => (master = next))
@@ -110,7 +113,46 @@ async function getMaster(controller) {
         masterInflight = null;
       });
   }
+  // ponytail: stale-while-revalidate. Measured against the live BSE host a full build is
+  // ~5.8 minutes for 11k schemes; awaiting it at the 6-hour boundary would hang the fund
+  // list for that long. Master roz mushkil se badalta hai, to purana index dikhao aur
+  // refresh peechhe chalne do.
+  if (master.list.length) return master;
   return masterInflight;
+}
+
+/**
+ * ponytail: pehli hi request ko 5.8 minute mat rulao. Index khali ho to BSE se sirf ek
+ * page mangwa kar dikha do (yehi purana behaviour tha) aur build peechhe chalta rahe.
+ * `total` yahan sirf isi page ka hai, is liye `warming: true` bhejte hain — jhooti 28k
+ * ginti wapas nahi laate. Ye window ek baar hoti hai, container restart ke baad.
+ */
+async function coldPage(controller, q, start, length) {
+  const res = await fetchPage(controller, start, Math.min(FETCH_MAX, Math.max(length * 2, length)));
+  const rows = (res?.data?.lists || []).filter(isTransactable).map((row, i) => mapScheme(row, i));
+  const amfi = (await getAmfiNavs()).navs;
+  const hidden = await getHidden();
+  const navOf = (item) => item.nav ?? navFor(amfi, item.scheme_isin, item.scheme_bse_code);
+  const shown = rows.filter((item) => !isHidden(hidden, item));
+  const priced = shown.filter((item) => navOf(item) != null);
+  const { lists } = query(priced, { ...q, start: 0, length });
+  const list = lists.map((item) => ({
+    ...item,
+    nav: navOf(item),
+    nav_date: item.nav_date || navDateFor(amfi, item.scheme_isin, item.scheme_bse_code),
+    nav_loaded: true,
+  }));
+
+  return {
+    list,
+    total: list.length,
+    unpriced: shown.length - priced.length,
+    priced: priced.length,
+    fetched: rows.length,
+    fields: rows.length ? Object.keys(rows[0]) : [],
+    sample: null,
+    warming: true,
+  };
 }
 
 async function getCatalogue(controller, q = {}) {
@@ -125,6 +167,27 @@ async function getCatalogue(controller, q = {}) {
 
   const start = Number(q.start) || 0;
   const length = Math.min(FETCH_MAX, Math.max(1, Number(q.length) || 20));
+
+  // Cold cache: give the build a couple of seconds, then stop waiting and serve one BSE
+  // page while it finishes in the background. A real build is ~5.8 minutes; nobody should
+  // sit through that. A cheap/stubbed build wins the race and is used straight away.
+  if (!master.list.length) {
+    const building = getMaster(controller).catch((err) => {
+      console.warn("[mf] master build failed:", err.message);
+      return null;
+    });
+    const timer = new Promise((resolve) => setTimeout(resolve, COLD_WAIT_MS).unref?.());
+    await Promise.race([building, timer]);
+    if (!master.list.length) {
+      try {
+        return await coldPage(controller, q, start, length);
+      } catch (err) {
+        if (!AMFI_FALLBACK) throw err;
+        console.warn("[mf] cold page fetch failed:", err.message);
+        return amfiCatalogue(q);
+      }
+    }
+  }
 
   let index;
   try {
