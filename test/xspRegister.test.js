@@ -48,6 +48,16 @@ describe("sxp_register payload", () => {
     assert.equal(typeof p.data.member, "string");
   });
 
+  it("txn_date is taken from start_date, so the two cannot disagree", () => {
+    // BSE ties them together: start 2026-11-10 with txn_date 5 was rejected
+    // (invalid_txn_date, msgid 3809) even 62 days out, while start 2026-10-05 / txn 5,
+    // 2026-09-25 / txn 25 and 2026-09-10 / txn 10 all registered. There is no minimum
+    // notice period — the only rule is that they match. Deriving makes it structural.
+    const p = buildXspRegisterPayload({ ...INTENT, start_date: "2026-09-25", txn_date: 5 }, CTX);
+    assert.equal(p.data.txn_date, 25, "the start date wins, not the stale dropdown value");
+    assert.equal(p.data.start_date, "2026-09-25");
+  });
+
   it("frequency stays lowercase", () => {
     // "MONTHLY" comes back `invalid`/freq.
     assert.equal(buildXspRegisterPayload(INTENT, CTX).data.freq, "m");
@@ -98,5 +108,12 @@ describe("SIP validation", () => {
     // number before BSE sees it. Rejecting it would block the real form.
     assert.equal(validateSip({ ...INTENT, txn_date: "5" }), null);
     assert.match(validateSip({ ...INTENT, end_date: "2020-01-01" }), /end date/);
+    // The exact form state that produced the live 502: SIP date "5th", start date the 10th.
+    assert.match(
+      validateSip({ ...INTENT, start_date: "2026-09-10", txn_date: 5 }),
+      /same day of the month/
+    );
+    // Matching is enough — no minimum lead time, so tomorrow is acceptable.
+    assert.equal(validateSip({ ...INTENT, start_date: "2026-09-10", txn_date: 10 }), null);
   });
 });
