@@ -5,7 +5,7 @@ const StarMFService = require("bse-starmfv2-sdk");
 const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
-const { getCatalogue, AMFI_FALLBACK } = require("../mf/catalogue");
+const { getCatalogue, schemeCategories, AMFI_FALLBACK } = require("../mf/catalogue");
 const { getHidden, isHidden } = require("../mf/hidden");
 const { getAmfiNavs } = require("../mf/amfiNav");
 const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE } = require("../mf/order");
@@ -943,6 +943,16 @@ class StarMFController {
       const HELD = new Set(["ALLOTTED", "ACCEPTED", "PAID"]);
       const rows = result?.data?.lists || result?.data?.items || result?.items || [];
       const items = rows.filter((o) => !o?.status || HELD.has(String(o.status).toUpperCase()));
+      // order_list names the scheme but never its category, so every row used to fall back
+      // to the literal "Mutual Fund" and the portfolio allocation pie drew one slice —
+      // technically true, useless as a chart. The master index already holds the real
+      // category for all 11k schemes; look it up by whichever identifier the row carries.
+      const catIndex = schemeCategories();
+      const categoryOfRow = (o) =>
+        catIndex[String(o.scheme || "").trim().toUpperCase()] ||
+        catIndex[String(o.scheme_isin || "").trim().toUpperCase()] ||
+        o.scheme_category ||
+        "Mutual Fund";
       const holdings = items.map((o) => ({
         // ponytail: BSE ke apne key naam — order_list `src_scheme_name` aur `folio_num`
         // deta hai. Purane naam pehle padhe ja rahe the, is liye folio hamesha khali
@@ -955,7 +965,7 @@ class StarMFController {
         nav: Number(o.nav || 0),
         status: o.status,
         ret_percentage: 0,
-        scheme_category: o.scheme_category || "Mutual Fund",
+        scheme_category: categoryOfRow(o),
       }));
       // ponytail: unpaid orders holding nahi hain, magar UI ko farq batana hai —
       // "kuch invest hi nahi kiya" aur "payment adhoori hai" ek jaisa nahi dikhna chahiye.
@@ -1218,8 +1228,8 @@ class StarMFController {
       const realSeries = mf?.chartData?.length ? mf.chartData : [];
       const chartData = realSeries.length ? realSeries : buildChartSeries(currentNav, returns);
 
-      const profile = fundProfile(mapped.name, `${mapped.category} ${mf?.meta?.scheme_category || ""}`);
-      const ratios = ratiosFromSeries(mf?.series || [], profile.holdings);
+      const profile = fundProfile();
+      const ratios = ratiosFromSeries(mf?.series || []);
       // ponytail: skip peer NAV fan-out — nginx times out scheme-details
       const categoryAvg = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
       const rank = { "1Y": null, "3Y": null, "5Y": null, ALL: null };

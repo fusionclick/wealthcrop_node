@@ -304,4 +304,28 @@ async function warmCatalogue(controller) {
   console.log(`[mf] master index warm: ${index.list.length} schemes in ${Date.now() - t0}ms`);
 }
 
-module.exports = { getCatalogue, query, warmCatalogue, AMFI_FALLBACK };
+/**
+ * {ISIN|BSE code: category} from the master index, for callers that hold a scheme
+ * identifier but no category — BSE's order_list is the one that matters: it names the
+ * scheme and the folio but never its category, so every portfolio row defaulted to
+ * "Mutual Fund" and the allocation pie drew a single slice for every investor.
+ *
+ * Reads the index only if it is already built. A cold index would mean awaiting a ~6
+ * minute build inside a portfolio request, and a portfolio is still perfectly usable with
+ * the caller's own fallback label — so this returns {} instead and the pie recovers on the
+ * next load, once the boot warm-up has finished.
+ */
+function schemeCategories() {
+  const out = {};
+  for (const item of master.list) {
+    const label = item.subType || item.category;
+    if (!label) continue;
+    for (const k of [item.scheme_isin, item.scheme_bse_code]) {
+      const key = String(k || "").trim().toUpperCase();
+      if (key) out[key] = label;
+    }
+  }
+  return out;
+}
+
+module.exports = { getCatalogue, query, warmCatalogue, schemeCategories, AMFI_FALLBACK };

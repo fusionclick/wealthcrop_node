@@ -55,7 +55,40 @@ describe("catalogue", () => {
       { date: "01-01-2025", nav: "120" },
     ]);
     assert.equal(calcReturnsFromSeries(rows)["1Y"] > 0, true);
-    assert.equal(fundProfile("ICICI Gold ETF FOF", "FoF").assetSplit[0].label, "Commodities");
+    // This used to assert the gold branch of a hardcoded profile — 98.6% "Commodities",
+    // 1.4% cash, and for every equity fund one identical sector donut. None of it came
+    // from a feed. Holdings and sector weights live in each AMC's monthly portfolio
+    // disclosure, which neither AMFI, BSE StarMF nor Kotak Neo exposes to us, so the
+    // charts are hidden rather than filled with invention.
+    assert.deepEqual(fundProfile(), { holdings: [], assetSplit: [], sectors: [], aumLabel: null });
+  });
+
+  it("risk ratios are measured from the NAV series, not from constants", () => {
+    const { ratiosFromSeries, parseNavRows } = require("../src/mf/scheme");
+    // Too little history to measure anything: say nothing.
+    assert.deepEqual(ratiosFromSeries([]), {});
+    assert.deepEqual(ratiosFromSeries([{ timestamp: 1, nav: 10 }]), {});
+
+    // A year of a genuinely volatile series.
+    const rows = [];
+    for (let i = 0; i < 300; i++) {
+      rows.push({ timestamp: 86400 * i, nav: 100 * (1 + 0.0004 * i) + (i % 7 < 3 ? 1.5 : -1.5) });
+    }
+    const r = ratiosFromSeries(rows);
+    assert.ok(r.volatility > 0, "volatility measured");
+    assert.equal(r.window, 252, "one trading year of daily returns");
+    assert.equal(r.riskFreeRate, 7, "the rate behind sharpe is reported, not hidden");
+    assert.ok(r.maxDrawdown < 0, "drawdown is a fall, so negative");
+    // The old code shipped sortino as a character-for-character copy of the sharpe
+    // formula, so the page printed one number under two definitions. Downside deviation
+    // ignores upside moves, so it is smaller than total volatility and sortino must differ.
+    assert.notEqual(r.sortino, r.sharpe, "sortino uses downside deviation, not total vol");
+    // alpha/beta needed a benchmark price series we do not have; top5/top20 summed the
+    // fabricated holdings. All four are gone rather than guessed.
+    for (const k of ["alpha", "beta", "top5", "top20"]) {
+      assert.equal(k in r, false, `${k} wapas aa gaya`);
+    }
+    assert.equal(parseNavRows([]).length, 0);
   });
 
   it("paginates and parses list query", () => {

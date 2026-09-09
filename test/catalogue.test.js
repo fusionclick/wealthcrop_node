@@ -366,3 +366,13 @@ describe("hidden schemes", () => {
     assert.equal(isHidden(hidden, { scheme_bse_code: "ANY" }), false);
   });
 });
+
+describe("portfolio category lookup", () => {
+  it("a cold master index answers {} instead of awaiting a ~6 minute build", () => {
+    // getClientPortfolio calls this inline. If it ever triggered or awaited a build, a
+    // container restart would make the first investor's portfolio hang; the row-level
+    // fallback label is a perfectly good answer until the boot warm-up lands.
+    const { schemeCategories } = require("../src/mf/catalogue");
+    assert.deepEqual(schemeCategories(), {});
+  });
+});

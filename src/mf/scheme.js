@@ -299,66 +299,94 @@ function rankInPeers(mine, peers = [], key) {
   return rows.filter((v) => v > mine).length + 1;
 }
 
-const SECTOR_COLORS = ["#15B7E6", "#3F61FF", "#FFB44C", "#C45A8C", "#FF5C73", "#B8C4FF", "#FFE863"];
-
-function fundProfile(name = "", category = "") {
-  const hay = `${name} ${category}`.toLowerCase();
-  if (/gold|silver|precious|commodit/.test(hay)) {
-    const holdings = [
-      { name: name || "Gold ETF", sector: "Commodities", instrument: "ETF / FoF", asset: 98.6 },
-      { name: "Cash & equivalents", sector: "Cash", instrument: "Cash", asset: 1.4 },
-    ];
-    const assetSplit = [
-      { label: "Commodities", value: 98.6, color: "#C5F7B1" },
-      { label: "Cash", value: 1.4, color: "#15B7E6" },
-    ];
-    return { holdings, assetSplit, sectors: assetSplit, aumLabel: null };
-  }
-  const sectors = [
-    { label: "Financial", value: 28, color: SECTOR_COLORS[0] },
-    { label: "Technology", value: 18, color: SECTOR_COLORS[1] },
-    { label: "Energy", value: 12, color: SECTOR_COLORS[2] },
-    { label: "Healthcare", value: 10, color: SECTOR_COLORS[3] },
-    { label: "Automobile", value: 9, color: SECTOR_COLORS[4] },
-    { label: "Consumer", value: 8, color: SECTOR_COLORS[5] },
-    { label: "Others", value: 15, color: SECTOR_COLORS[6] },
-  ];
-  if (/large/.test(hay)) sectors[0].value = 32;
-  const holdings = sectors.slice(0, 6).map((s) => ({
-    name: `${s.label} basket`,
-    sector: s.label,
-    instrument: "Equity",
-    asset: s.value,
-  }));
-  const assetSplit = [
-    { label: "Equity", value: 96.5, color: "#C5F7B1" },
-    { label: "Cash", value: 3.5, color: "#15B7E6" },
-  ];
-  return { holdings, assetSplit, sectors, aumLabel: null };
+/**
+ * Portfolio composition — holdings, equity/debt/cash split, sector weights.
+ *
+ * This used to RETURN INVENTED DATA and the fund page drew three charts from it. Every
+ * equity scheme in the catalogue got the identical sector donut (Financial 28, Technology
+ * 18, Energy 12, Healthcare 10, Automobile 9, Consumer 8, Others 15 — the only variation
+ * in the whole function was bumping Financial to 32 if the name contained "large"), the
+ * identical 96.5/3.5 equity-cash split, and a holdings table listing instruments named
+ * "Financial basket" and "Technology basket" that do not exist. Gold funds got a
+ * hardcoded 98.6/1.4.
+ *
+ * None of that is derivable from any feed we have. Holdings and sector weights come from
+ * each AMC's monthly portfolio disclosure; AMFI's NAV feed does not carry them, BSE
+ * StarMF does not expose them, and Kotak Neo's Trade API has no mutual-fund surface at
+ * all. So there is nothing to compute here and inventing it on an investment platform is
+ * worse than showing nothing.
+ *
+ * Empty arrays. The fund page already hides each section when its array is empty. Wire a
+ * real portfolio-disclosure source (a data vendor, or per-AMC monthly files) and fill
+ * these in; the charts light up again with no UI change.
+ */
+function fundProfile() {
+  return { holdings: [], assetSplit: [], sectors: [], aumLabel: null };
 }
 
-function ratiosFromSeries(sorted = [], holdings = []) {
+/**
+ * Risk metrics computed from the real NAV series — and only the ones it can actually
+ * support.
+ *
+ * Removed, because each was a constant dressed as a measurement:
+ *   alpha  = (annualised return - 0.12) * 100. That 0.12 is a 12% benchmark return
+ *            invented here; alpha is defined against the scheme's own benchmark, which we
+ *            do not have a price series for.
+ *   beta   = volatility / 0.16. Beta is covariance with the benchmark divided by the
+ *            benchmark's variance — it cannot be derived from the fund's own series at
+ *            all, and 0.16 was a guess at market volatility.
+ *   top5 / top20 = sums over the fabricated holdings above.
+ *   sortino was character-for-character the sharpe formula, so the page printed the same
+ *            number twice under two different definitions.
+ *
+ * What is left is real. Sortino now uses downside deviation, so it differs from sharpe.
+ * riskFreeRate is returned alongside the ratios rather than buried, because a Sharpe
+ * ratio without its risk-free rate is not interpretable.
+ */
+const RISK_FREE = 0.07; // ~1y Indian G-sec. Move to config when it needs to track.
+const TRADING_DAYS = 252;
+
+function ratiosFromSeries(sorted = []) {
   const rets = [];
-  for (let i = 1; i < sorted.length; i++) rets.push(sorted[i].nav / sorted[i - 1].nav - 1);
-  const slice = rets.slice(-252);
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1].nav;
+    if (prev > 0) rets.push(sorted[i].nav / prev - 1);
+  }
+  const slice = rets.slice(-TRADING_DAYS);
   if (slice.length < 20) return {};
+
   const mean = slice.reduce((a, b) => a + b, 0) / slice.length;
-  const vol = Math.sqrt(slice.reduce((a, b) => a + (b - mean) ** 2, 0) / slice.length) * Math.sqrt(252);
-  const ann = mean * 252;
-  const top = (n) => {
-    const s = [...holdings].sort((a, b) => b.asset - a.asset).slice(0, n);
-    const v = s.reduce((a, h) => a + Number(h.asset || 0), 0);
-    return v ? `${v.toFixed(1)}%` : null;
-  };
+  const variance = slice.reduce((a, b) => a + (b - mean) ** 2, 0) / slice.length;
+  const vol = Math.sqrt(variance) * Math.sqrt(TRADING_DAYS);
+  const ann = mean * TRADING_DAYS;
+
+  // Downside deviation: only returns below the daily risk-free hurdle count, which is
+  // what makes sortino a different statistic from sharpe.
+  const hurdle = RISK_FREE / TRADING_DAYS;
+  const below = slice.filter((r) => r < hurdle).map((r) => (r - hurdle) ** 2);
+  const downside = below.length
+    ? Math.sqrt(below.reduce((a, b) => a + b, 0) / slice.length) * Math.sqrt(TRADING_DAYS)
+    : 0;
+
+  // Max drawdown over the same window: worst peak-to-trough fall an investor sat through.
+  const window = sorted.slice(-(slice.length + 1));
+  let peak = window[0]?.nav || 0;
+  let maxDd = 0;
+  for (const p of window) {
+    if (p.nav > peak) peak = p.nav;
+    if (peak > 0) maxDd = Math.min(maxDd, p.nav / peak - 1);
+  }
+
+  const r2 = (v) => parseFloat(v.toFixed(2));
   return {
-    top5: top(5),
-    top20: top(20),
     peRatio: null,
     pbRatio: null,
-    alpha: parseFloat(((ann - 0.12) * 100).toFixed(2)),
-    beta: vol ? parseFloat((vol / 0.16).toFixed(2)) : null,
-    sharpe: vol ? parseFloat(((ann - 0.07) / vol).toFixed(2)) : null,
-    sortino: vol ? parseFloat(((ann - 0.07) / vol).toFixed(2)) : null,
+    volatility: vol ? r2(vol * 100) : null,
+    sharpe: vol ? r2((ann - RISK_FREE) / vol) : null,
+    sortino: downside ? r2((ann - RISK_FREE) / downside) : null,
+    maxDrawdown: maxDd ? r2(maxDd * 100) : null,
+    riskFreeRate: r2(RISK_FREE * 100),
+    window: slice.length,
   };
 }
 
