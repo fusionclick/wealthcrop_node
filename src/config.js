@@ -42,6 +42,21 @@ function resolveInvestorUrl(
 
 exports.resolveBseBaseUrl = resolveBseBaseUrl;
 exports.resolveInvestorUrl = resolveInvestorUrl;
+
+/**
+ * Are we pointed at BSE's UAT host?
+ *
+ * It matters because UAT has no back office: a new UCC sits at PENDING_VERIFICATION and
+ * nothing ever moves it, so the KYC step can never finish there. Production resolves to a
+ * different host, so anything gated on this simply does not run in production.
+ *
+ * Derived from the resolved base URL rather than its own env var on purpose — one switch,
+ * and it cannot disagree with the host we are actually calling.
+ */
+const isBseDemo = (url = baseUrl) => /starmfv2demo\.bseindia\.com/i.test(String(url || ""));
+exports.isBseDemo = isBseDemo;
+exports.IS_BSE_DEMO = isBseDemo(baseUrl);
+
 exports.configData = {
   username: process.env.BSE_USERNAME || "",
   password: process.env.BSE_PASSWORD || "",

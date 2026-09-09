@@ -658,3 +658,44 @@ describe("UCC ownership", () => {
     assert.equal(investorPan({ profile: { pan_number: "" } }), null);
   });
 });
+
+describe("KYC verdict from BSE ucc_status", () => {
+  const { kycStatusFor, kycFromUcc, UCC_TO_KYC } = require("../src/mf/kyc");
+  const { isBseDemo } = require("../src/config");
+
+  it("ACTIVE is verified — it was missing and read as unknown", () => {
+    // Observed live: an investor already placing orders reports ACTIVE, not APPROVED.
+    // kycFromUcc mapped it to "unknown", so the Review step told them KYC was pending.
+    assert.equal(UCC_TO_KYC.ACTIVE, "verified");
+    assert.equal(kycStatusFor("ACTIVE"), "verified");
+    assert.equal(kycStatusFor("APPROVED"), "verified");
+    assert.equal(kycFromUcc({ ucc_status: "active" }, "U1").kyc_status, "verified");
+  });
+
+  it("only PENDING_VERIFICATION is waved through, and only on UAT", () => {
+    // UAT has no back office, so a new UCC sits at PENDING_VERIFICATION forever and the
+    // KYC step can never finish there.
+    assert.equal(kycStatusFor("PENDING_VERIFICATION", false), "pending");
+    assert.equal(kycStatusFor("PENDING_VERIFICATION", true), "verified");
+    // A refused UCC is never waved through, demo or not.
+    for (const s of ["REJECTED", "DEACTIVATED", "INACTIVE"]) {
+      assert.equal(kycStatusFor(s, true), "rejected", s);
+    }
+    assert.equal(kycStatusFor("PENDING", true), "pending", "plain PENDING is not the UAT case");
+    assert.equal(kycStatusFor("WHAT", true), "unknown");
+  });
+
+  it("marks the pass-through so it cannot be mistaken for a real verification", () => {
+    assert.equal(kycFromUcc({ ucc_status: "PENDING_VERIFICATION" }, "U1", true).auto_verified_on_demo, true);
+    assert.equal(kycFromUcc({ ucc_status: "PENDING_VERIFICATION" }, "U1", false).auto_verified_on_demo, false);
+    assert.equal(kycFromUcc({ ucc_status: "ACTIVE" }, "U1", true).auto_verified_on_demo, false);
+  });
+
+  it("the demo flag follows the resolved BSE host, not a separate switch", () => {
+    assert.equal(isBseDemo("https://starmfv2demo.bseindia.com"), true);
+    assert.equal(isBseDemo("https://STARMFV2DEMO.bseindia.com/"), true);
+    assert.equal(isBseDemo("https://starmfv2.bseindia.com"), false, "production must not match");
+    assert.equal(isBseDemo(""), false);
+    assert.equal(isBseDemo(null), false);
+  });
+});

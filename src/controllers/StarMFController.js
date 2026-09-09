@@ -1,4 +1,4 @@
-const { configData } = require("../config");
+const { configData, IS_BSE_DEMO } = require("../config");
 const axios = require("axios");
 const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
@@ -484,7 +484,29 @@ class StarMFController {
 
     try {
       const responseData = await makeRequest();
-      res.json(responseData);
+
+      // add_ucc's own reply does not reliably carry the UCC's status, and the KYC page was
+      // left waiting on Laravel's separate bse-status sync — which, when it fails, leaves
+      // the investor on "awaiting BSE verification" with no way forward. Ask BSE directly
+      // for the record we just created and hand the verdict back with the response, so the
+      // page can decide without a second hop through Laravel.
+      let kyc = null;
+      try {
+        if (!this.accessToken) await this.loginFunc();
+        const rec = await this.uccService.getParticularUcc(this.accessToken, {
+          data: { investor: { client_code } },
+        });
+        const record = rec?.data?.lists?.[0] || rec?.data || null;
+        if (record?.ucc_status) kyc = kycFromUcc(record, client_code, IS_BSE_DEMO);
+      } catch (e) {
+        // Never fail a successful registration because the follow-up lookup did not answer.
+        console.warn("[kyc] post-add_ucc status lookup failed:", e.message);
+      }
+      if (kyc?.auto_verified_on_demo) {
+        console.warn("[kyc] UAT host — PENDING_VERIFICATION treated as verified", { ucc: client_code });
+      }
+
+      res.json(kyc ? { ...responseData, kyc } : responseData);
     } catch (error) {
       const isUnauthorized = error.response?.status === 401 || 
                              error.message?.includes('401') || 
@@ -1083,10 +1105,14 @@ class StarMFController {
       console.warn("[kyc] UCC ownership unverified", { ucc: req.ucc, bsePan: Boolean(owner), investorPan: Boolean(mine) });
     }
 
-    const verdict = kycFromUcc(record, req.ucc);
+    const verdict = kycFromUcc(record, req.ucc, IS_BSE_DEMO);
     if (verdict.kyc_status === "unknown") {
       // Field rename yahin pakda jayega — warna investor hamesha "awaiting verification" dekhta hai.
       console.warn("[kyc] unmapped ucc_status from BSE", { ucc: req.ucc, ucc_status: record?.ucc_status });
+    }
+    if (verdict.auto_verified_on_demo) {
+      // Loud on purpose: this is the only trace that a UAT UCC was passed through.
+      console.warn("[kyc] UAT host — PENDING_VERIFICATION treated as verified", { ucc: req.ucc });
     }
     return res.json({ status: "success", data: verdict });
   };

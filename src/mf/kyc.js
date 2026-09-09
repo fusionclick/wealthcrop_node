@@ -3,6 +3,10 @@
 // lagana: wo har accepted order par FALSE tha (memory: bse-ucc-lifecycle).
 const UCC_TO_KYC = {
   APPROVED: "verified",
+  // Observed live: an investor who had already been placing orders comes back as ACTIVE,
+  // not APPROVED. It was missing here, so it fell through to "unknown" and the Review step
+  // told a fully active investor their KYC was still awaiting verification.
+  ACTIVE: "verified",
   PENDING_VERIFICATION: "pending",
   PENDING: "pending",
   REJECTED: "rejected",
@@ -11,18 +15,36 @@ const UCC_TO_KYC = {
 };
 
 /**
+ * On BSE's UAT host a new UCC sits at PENDING_VERIFICATION indefinitely — there is no back
+ * office there to approve it — so the KYC step can never complete and nothing downstream
+ * can be shown working. Treat that one status as verified there, and only there.
+ *
+ * Deliberately narrow. REJECTED, DEACTIVATED and INACTIVE still mean what they say, so a
+ * refused UCC is never waved through; and production resolves to a different host, so this
+ * branch does not execute there at all. `demo` is a parameter rather than read from config
+ * inside, which keeps the decision in one place (the resolved base URL) and testable.
+ */
+function kycStatusFor(uccStatus, demo = false) {
+  if (demo && uccStatus === "PENDING_VERIFICATION") return "verified";
+  return UCC_TO_KYC[uccStatus] || "unknown";
+}
+
+/**
  * get_ucc `data` → { ucc, ucc_status, kyc_status, reasons, transaction_ready, checked_at }.
  * Record na ho (BSE par nahi mila / pahunch nahi paye) to kyc_status "unknown" —
  * Laravel usay kabhi store nahi karta, stored value jaisi thi waisi rehti hai.
  */
-function kycFromUcc(record, ucc) {
+function kycFromUcc(record, ucc, demo = false) {
   const uccStatus = record?.ucc_status ? String(record.ucc_status).trim().toUpperCase() : null;
   const ready = Array.isArray(record?.transaction_ready) ? record.transaction_ready : [];
   const reasons = [...new Set(ready.map((t) => String(t?.verification_failed_reason || "").trim()).filter(Boolean))];
   return {
     ucc: String(ucc || record?.investor?.client_code || record?.client_code || ""),
     ucc_status: uccStatus,
-    kyc_status: UCC_TO_KYC[uccStatus] || "unknown",
+    kyc_status: kycStatusFor(uccStatus, demo),
+    // So nobody mistakes a UAT pass for a real one — the UI and the stored record both
+    // carry the reason the status was upgraded.
+    auto_verified_on_demo: Boolean(demo && uccStatus === "PENDING_VERIFICATION"),
     reasons,
     transaction_ready: ready,
     checked_at: new Date().toISOString(),
@@ -59,4 +81,4 @@ function investorPan(investor) {
   return /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan) ? pan : null;
 }
 
-module.exports = { UCC_TO_KYC, kycFromUcc, uccPan, investorPan };
+module.exports = { UCC_TO_KYC, kycStatusFor, kycFromUcc, uccPan, investorPan };
