@@ -1,3 +1,24 @@
+/**
+ * NAV HISTORY KA SOURCE — ye padh lo is se pehle ke koi samjhe ke chart BSE se aate hain.
+ *
+ * App ka har NAV chart yahin se aata hai: **api.mfapi.in**, jo AMFI ke NAV ka ek free
+ * third-party mirror hai. Ye BSE nahi hai. Fund detail page ka chart seedha, aur basket
+ * ka NAV/metrics Laravel ke zariye `/scheme-details` se — dono isi raaste par hain.
+ *
+ * Wajah: **BSE historical NAV publish karta hi nahi.** BSE StarMF ka scheme master har
+ * scheme par sirf ek latest `nav` + `nav_date` deta hai; koi time-series field maujood
+ * hi nahi. AMFI ka apna NAVAll.txt bhi rozana ka snapshot hai, history nahi. Yaani
+ * chart ke liye "BSE par switch kar do" mumkin hi nahi — wahan wo data hai hi nahi.
+ *
+ * Kaun sa data kahan se:
+ *   latest NAV (cards, scheme list)  ->  AMFI NAVAll.txt (official)   — amfiNav.js
+ *   NAV history (saare charts)       ->  api.mfapi.in (third-party)   — ye file
+ *   scheme master + orders           ->  BSE StarMF
+ *
+ * Apni history chahiye to sahih raasta ye hai ke AMFI ka rozana snapshot store karte
+ * jayen aur waqt ke sath apni series bana len. Us din tak ye dependency yahin rahegi —
+ * isay hatane se pehle uska badal mojood hona chahiye.
+ */
 const axios = require("axios");
 const { parseNavRows, calcReturnsFromSeries, chartFromSeries, avgReturns, rankInPeers } = require("./scheme");
 const { amfiCodeForIsin } = require("./amfiNav");
