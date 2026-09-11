@@ -358,6 +358,28 @@ class StarMFController {
       });
     }
 
+    // PAN is optional on the KYC form (an investor can save a partial profile and come
+    // back), so a request with no PAN now genuinely reaches this handler. It used to be
+    // spread through the body as `pan || "NYTPA0008A"` in three places — a hardcoded PAN
+    // that is not the investor's, registered at BSE against their real name, bank and
+    // address. Same class of bug as the "123456789012" bank fallback: refuse, never invent.
+    const holderPan = String(pan || "").trim().toUpperCase();
+    if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(holderPan)) {
+      return res.status(400).json({
+        error: 'Validation failed',
+        field: 'person.pan',
+        message: 'PAN is required and must look like ABCDE1234F'
+      });
+    }
+    // 4th character is the holder type, and this payload is hardcoded Individual/SI.
+    if (holderPan[3] !== 'P') {
+      return res.status(400).json({
+        error: 'Validation failed',
+        field: 'person.pan',
+        message: 'Only an individual PAN (4th letter P) can be registered here'
+      });
+    }
+
     const makeRequest = async () => {
       if (!this.bseToken) {
         // Auto login if no token
@@ -401,7 +423,7 @@ class StarMFController {
                       "identifier": [
                           {
                               "identifier_type": "pan",
-                              "identifier_number": pan || "NYTPA0008A"
+                              "identifier_number": holderPan
                           },
                           {
                               "identifier_type": "accredited_investor",
@@ -468,7 +490,7 @@ class StarMFController {
                       "tax_status": "Individual",
                       "identifier": {
                           "identifier_type": "pan",
-                          "identifier_number": pan || "NYTPA0008A"
+                          "identifier_number": holderPan
                       },
                       "wealth_source": "1",
                       "income_slab": "32",
@@ -478,7 +500,7 @@ class StarMFController {
                       "tax_residency": [
                           {
                               "country": "IND",
-                              "tax_id_no": pan || "NYTPA0008A",
+                              "tax_id_no": holderPan,
                               "tax_id_type": "C"
                           }
                       ]
