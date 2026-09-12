@@ -34,6 +34,8 @@ router.post("/updatePurchaseOrder", ...auth, StarMFController.updatePurchaseOrde
 router.post("/getAllOrders", ...auth, StarMFController.getAllOrders);
 router.post("/getOrder", ...auth, StarMFController.getOrder);
 router.post("/getClientPortfolio", requireInvestor, StarMFController.getClientPortfolio);
+// Same BSE endpoint as getClientPortfolio, opposite intent: every order, every status.
+router.post("/orderHistory", requireInvestor, StarMFController.orderHistory);
 router.post("/cancelPurchaseOrder", ...auth, StarMFController.cancelPurchaseOrder);
 
 // Payments

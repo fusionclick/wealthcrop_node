@@ -1052,6 +1052,85 @@ class StarMFController {
       return res.status(500).json({ status: "error", message: error.message });
     }
   };
+
+  /**
+   * Every order this UCC has ever placed — the investor-facing transaction history.
+   *
+   * getClientPortfolio asks the same BSE endpoint but keeps only open, allotted orders,
+   * because it is building a holdings list. History is the opposite: a rejected purchase
+   * and a completed redemption are exactly what the investor came to look at.
+   *
+   * BSE's order_list needs `open_close`, and its own sample only ever sends "o" — whether
+   * it can be omitted is unproven, so this asks for each side separately with the payload
+   * shape that is known to work and merges the two. If the closed leg fails, the open one
+   * still answers and the page shows what it can rather than erroring out.
+   */
+  orderHistory = async (req, res) => {
+    try {
+      const ucc = req.ucc || investorUcc(req.investor) || req.body?.data?.ucc || req.body?.ucc;
+      if (!ucc) {
+        return res.status(400).json({ status: "error", message: "ucc is required" });
+      }
+
+      const fetchSide = async (openClose) => {
+        const reqObj = {
+          data: {
+            fields: ["ALL"],
+            start: 0,
+            length: 100,
+            filter_param: { ucc: [ucc], member_code: this.memberCode, open_close: openClose },
+          },
+        };
+        const result = await new Promise((resolve) => {
+          this.handleTrxnRequest("getAllOrders", reqObj, {
+            json: (data) => resolve(data),
+            status: (code) => ({ json: (data) => resolve({ ...data, _status: code }) }),
+          });
+        });
+        if (result?._status) {
+          console.warn("[orders] BSE order_list failed", { ucc, open_close: openClose, status: result._status });
+          return [];
+        }
+        return result?.data?.lists || result?.data?.items || result?.items || [];
+      };
+
+      const [open, closed] = await Promise.all([fetchSide("o"), fetchSide("c")]);
+
+      // The same order can surface on both legs while it is settling; the id is BSE's,
+      // so dedupe on it and fall back to a composite key when a row carries none.
+      const seen = new Set();
+      const merged = [...open, ...closed].filter((o) => {
+        const key = String(o?.id ?? o?.order_id ?? `${o?.scheme}|${o?.order_date}|${o?.amount}`);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      // BSE spells the same field several ways across endpoints, so read every alias the
+      // rest of this controller already knows about rather than guessing one.
+      const orders = merged.map((o) => ({
+        id: o.id ?? o.order_id ?? null,
+        date: o.order_date || o.trxn_date || o.created_at || null,
+        scheme_name: o.src_scheme_name || o.scheme_name || o.scheme || "",
+        scheme_bse_code: o.scheme || o.scheme_code || "",
+        type: o.trxn_type || o.order_type || o.transaction_type || "",
+        amount: Number(o.amount || 0),
+        units: Number(o.units || 0),
+        nav: Number(o.nav || 0),
+        folio: o.folio_num || o.folio || "",
+        status: o.status || "",
+        remarks: o.remarks || o.message || "",
+      }));
+
+      // Newest first. Rows with no date sink to the bottom rather than jumbling the top.
+      orders.sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0));
+
+      return res.json({ status: "success", data: { orders, count: orders.length } });
+    } catch (error) {
+      return res.status(500).json({ status: "error", message: error.message });
+    }
+  };
+
   cancelPurchaseOrder = async (req, res) => {
     if (!req.body || !Object.keys(req.body).length) {
       return res.status(400).json({ status: "error", message: "Order id is required" });
