@@ -92,11 +92,31 @@ describe("catalogue", () => {
   });
 
   it("paginates and parses list query", () => {
+    // Ranking/filtering defaults ride along on every parse — they must all be present so
+    // listCacheKey can key on them.
+    const noFilters = { risk: "", txn: "", minAge: null, maxAge: null, minReturn: null, returnPeriod: "1Y", sort: "", order: "desc" };
     const q = parseListQuery({ start: 20, length: 10, search: "gold" });
-    assert.deepEqual(q, { start: 20, length: 10, search: "gold", category: "", isin: "", scheme_code: "", plan: "", sip: "", mode: "" });
+    assert.deepEqual(q, { start: 20, length: 10, search: "gold", category: "", isin: "", scheme_code: "", plan: "", sip: "", mode: "", ...noFilters });
     assert.deepEqual(
       parseListQuery({ plan: "Direct", sip: "YES", mode: "Physical" }),
-      { start: 0, length: 20, search: "", category: "", isin: "", scheme_code: "", plan: "direct", sip: "yes", mode: "physical" }
+      { start: 0, length: 20, search: "", category: "", isin: "", scheme_code: "", plan: "direct", sip: "yes", mode: "physical", ...noFilters }
+    );
+    const ranked = parseListQuery({ risk: "Very High,High", txn: "sip,swp", minAge: "3", minReturn: "12", returnPeriod: "3y", sort: "RETURNS_3Y", order: "ASC" });
+    assert.equal(ranked.risk, "Very High,High");
+    assert.equal(ranked.txn, "sip,swp");
+    assert.equal(ranked.minAge, 3);
+    assert.equal(ranked.minReturn, 12);
+    assert.equal(ranked.returnPeriod, "3Y");
+    assert.equal(ranked.sort, "returns_3y");
+    assert.equal(ranked.order, "asc");
+    // Every filter has to reach the cache key, or two different result sets share an entry.
+    assert.notEqual(
+      listCacheKey(parseListQuery({ risk: "High" })),
+      listCacheKey(parseListQuery({ risk: "Low" }))
+    );
+    assert.notEqual(
+      listCacheKey(parseListQuery({ sort: "returns_1y", order: "asc" })),
+      listCacheKey(parseListQuery({ sort: "returns_1y", order: "desc" }))
     );
     assert.deepEqual(paginate([1, 2, 3, 4, 5], 2, 2), [3, 4]);
     assert.equal(matchesCategory({ name: "HDFC Large Cap", subType: "Equity • Large Cap" }, "large_cap"), true);
@@ -247,10 +267,32 @@ describe("orders", () => {
     assert.equal(validateOrder({ data: { orders: [{ type: "p", scheme: "007G", amount: 0 }] } }).ok, false);
     const ok = validateOrder({ data: { orders: [{ type: "p", scheme: "007G", amount: 5000 }] } });
     assert.equal(ok.ok, true);
-    const minFail = checkSchemeLimits(ok.order, { min_lumpsum_amount: 10000, purchase_allowed: "Y" });
+    // BSE's real shape: the minimum lives in lumpsum[] -> Purchase, not in a flat field.
+    // These fixtures used to say `min_lumpsum_amount`, which BSE has never sent — so the
+    // guard read undefined, treated it as "no minimum", and passed every order through
+    // while this test went green.
+    const bseScheme = (minAmt, maxAmt = 100000000000) => ({
+      purchase_allowed: "Y",
+      lumpsum: [
+        {
+          scheme_transaction_type: "Purchase",
+          scheme_transaction_effective_start_date: "2010-07-19T00:00:00",
+          scheme_transaction_effective_end_date: "2037-12-31T00:00:00",
+          scheme_transaction_single_details: {
+            scheme_transaction_amt: { scheme_transaction_min_amt: minAmt, scheme_transaction_max_amt: maxAmt },
+          },
+        },
+      ],
+    });
+    const minFail = checkSchemeLimits(ok.order, bseScheme(10000));
     assert.equal(minFail.ok, false);
-    const minOk = checkSchemeLimits(ok.order, { min_lumpsum_amount: 1000, purchase_allowed: "Y" });
+    assert.match(minFail.error, /Minimum investment is ₹10000/);
+    const minOk = checkSchemeLimits(ok.order, bseScheme(1000));
     assert.equal(minOk.ok, true);
+    // BSE publishes a ceiling too, and nothing checked it before.
+    assert.equal(checkSchemeLimits(ok.order, bseScheme(1000, 2000)).ok, false);
+    // An already-mapped row (minLumpsum) still works — the portfolio code path hands one in.
+    assert.equal(checkSchemeLimits(ok.order, { purchase_allowed: "Y", minLumpsum: 10000 }).ok, false);
     const blocked = checkSchemeLimits(ok.order, { purchase_allowed: "N" });
     assert.equal(blocked.ok, false);
   });

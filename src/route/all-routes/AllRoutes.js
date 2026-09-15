@@ -59,6 +59,9 @@ router.post("/getMisDetails", ...auth, StarMFController.getMisDetails);
 // Schemes & NAV
 router.post("/master-scheme-list", StarMFController.getSchemeMasterList);
 router.post("/scheme-details", StarMFController.getSchemeDetails);
+// Public like the rest of the catalogue — comparing funds needs no account, and gating it
+// would put the compare tool behind a login that /master-scheme-list does not require.
+router.post("/scheme-compare", StarMFController.compareSchemes);
 router.post("/getNavMasterList", StarMFController.getNavMasterList);
 router.post("/getSchemeReturns", StarMFController.getSchemeReturns);
 

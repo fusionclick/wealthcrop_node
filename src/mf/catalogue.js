@@ -3,6 +3,7 @@ const { getAmfiNavs } = require("./amfiNav");
 const { navFor, navDateFor } = require("./navStore");
 const { getHidden, isHidden } = require("./hidden");
 const { getCategories, categoryOf } = require("./categories");
+const { enrichRows, warmEnrichment, applyCached, enrichmentStats } = require("./kuvera");
 
 // Page size the caller may ask for. BSE ka master khud chunk-chunk aata hai (CHUNK).
 const FETCH_MAX = 100;
@@ -116,7 +117,16 @@ async function getMaster(controller) {
     masterInflight = buildMaster(controller)
       // An empty build must never replace a good index: doing so put a stale-but-usable
       // catalogue back to zero and sent the next request into a full ~6 minute await.
-      .then((next) => (next.list.length ? (master = next) : master))
+      .then((next) => {
+        if (!next.list.length) return master;
+        master = next;
+        // Risk / fund age / returns live in the enrichment cache, not in BSE's master, and
+        // the FILTERS read them off the index row. Re-attach whatever is already cached
+        // the moment a rebuild lands, then let the warmer fill the rest in the background.
+        for (const row of master.list) applyCached(row);
+        warmEnrichment(master.list).catch((err) => console.warn("[mf] enrichment warm failed:", err.message));
+        return master;
+      })
       .catch((err) => {
         // Purana index dikhana 502 se behtar — master roz mushkil se badalta hai. Bilkul
         // khali ho to error upar jaye, taake AMFI fallback / stale-cache chal sakein.
@@ -152,13 +162,15 @@ async function coldPage(controller, q, start, length) {
   const priced = shown.filter((item) => navOf(item) != null);
   const cats = await getCategories();
   const { lists } = query(priced, { ...q, start: 0, length });
-  const list = lists.map((item) => ({
-    ...item,
-    nav: navOf(item),
-    nav_date: item.nav_date || navDateFor(amfi, item.scheme_isin, item.scheme_bse_code),
-    nav_loaded: true,
-    admin_category: categoryOf(cats, item),
-  }));
+  const list = await enrichRows(
+    lists.map((item) => ({
+      ...item,
+      nav: navOf(item),
+      nav_date: item.nav_date || navDateFor(amfi, item.scheme_isin, item.scheme_bse_code),
+      nav_loaded: true,
+      admin_category: categoryOf(cats, item),
+    }))
+  );
 
   return {
     list,
@@ -232,17 +244,22 @@ async function getCatalogue(controller, q = {}) {
   // often than the master index, so it must not be baked into it.
   const cats = await getCategories();
   const { total, lists } = query(priced, { ...q, start, length });
-  const list = lists.map((item) => ({
-    ...item,
-    nav: navOf(item),
-    nav_date: item.nav_date || navDateFor(amfi, item.scheme_isin, item.scheme_bse_code),
-    nav_loaded: true,
-    admin_category: categoryOf(cats, item),
-  }));
+  // Enrichment for the rows actually being returned: the warm pass fills the index in the
+  // background, this makes sure the 20 rows on screen are not waiting for it.
+  const list = await enrichRows(
+    lists.map((item) => ({
+      ...item,
+      nav: navOf(item),
+      nav_date: item.nav_date || navDateFor(amfi, item.scheme_isin, item.scheme_bse_code),
+      nav_loaded: true,
+      admin_category: categoryOf(cats, item),
+    }))
+  );
 
   return {
     list,
     total,
+    enrichment: enrichmentStats(),
     unpriced: shown.length - priced.length,
     priced: priced.length,
     fetched: index.list.length,
@@ -266,7 +283,80 @@ const haystack = (f) => `${f.name || ""} ${f.scheme_isin || ""} ${f.scheme_bse_c
 // hai, is liye user ko wahi ginti dikhti hai jitni rows usay milti hain.
 const YESNO = { yes: true, y: true, "1": true, no: false, n: false, "0": false };
 
-function query(list = [], { search = "", category = "", isin = "", scheme_code = "", plan = "", sip = "", mode = "", start = 0, length = 20 } = {}) {
+const csv = (v) =>
+  String(v || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+// Ticket 11's "transaction availability" filter. Every key reads a flag BSE itself
+// published for that scheme (see schemeTransactions in mf/scheme.js); `null` means BSE did
+// not say and is NOT treated as "yes" — a filter must never widen itself on missing data.
+const TXN_FILTERS = {
+  lumpsum: (f) => f.txn?.lumpsum === true,
+  sip: (f) => f.txn?.sip === true,
+  swp: (f) => f.txn?.swp === true,
+  stp: (f) => f.txn?.stp === true,
+  switch: (f) => f.txn?.switchAllowed === true,
+  redemption: (f) => f.txn?.redemption === true,
+};
+
+// Ranking. Only metrics that are actually on an index row — returns/age/rating arrive from
+// the enrichment warm pass, the rest are BSE's own. Nulls always sink to the bottom in both
+// directions: an unknown 3Y return must not win a "best 3Y" sort.
+const SORTS = {
+  returns_1y: (f) => f.returns?.["1Y"],
+  returns_3y: (f) => f.returns?.["3Y"],
+  returns_5y: (f) => f.returns?.["5Y"],
+  age: (f) => f.ageYears,
+  rating: (f) => f.fundRating,
+  risk: (f) => f.riskRank,
+  min_sip: (f) => f.minSip,
+  min_lumpsum: (f) => f.minLumpsum,
+  expense: (f) => (f.expense == null ? null : Number(String(f.expense).replace(/[^0-9.]/g, "")) || null),
+  nav: (f) => f.nav,
+  name: (f) => f.name,
+};
+
+function sortRows(rows, sort, order = "desc") {
+  const pick = SORTS[sort];
+  if (!pick) return rows;
+  const dir = String(order).toLowerCase() === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const x = pick(a);
+    const y = pick(b);
+    const xn = x == null || x === "" || Number.isNaN(x);
+    const yn = y == null || y === "" || Number.isNaN(y);
+    if (xn && yn) return 0;
+    if (xn) return 1;
+    if (yn) return -1;
+    if (typeof x === "string" || typeof y === "string") return String(x).localeCompare(String(y)) * dir;
+    return (x - y) * dir;
+  });
+}
+
+function query(
+  list = [],
+  {
+    search = "",
+    category = "",
+    isin = "",
+    scheme_code = "",
+    plan = "",
+    sip = "",
+    mode = "",
+    risk = "",
+    txn = "",
+    minAge = null,
+    maxAge = null,
+    minReturn = null,
+    returnPeriod = "1Y",
+    sort = "",
+    order = "desc",
+    start = 0,
+    length = 20,
+  } = {}
+) {
   let rows = list;
   const code = String(isin || scheme_code || "").trim().toUpperCase();
   if (code) {
@@ -281,6 +371,24 @@ function query(list = [], { search = "", category = "", isin = "", scheme_code =
   if (sip in YESNO) rows = rows.filter((f) => f.sip_allowed === YESNO[sip]);
   if (mode === "physical") rows = rows.filter((f) => f.holding_modes?.physical === true);
   if (mode === "demat") rows = rows.filter((f) => f.holding_modes?.demat !== false);
+
+  const risks = csv(risk).map((r) => r.toLowerCase());
+  if (risks.length) rows = rows.filter((f) => f.risk && risks.includes(String(f.risk).toLowerCase()));
+
+  // Several transaction types = ALL of them, not any: "SIP and SWP" means a scheme that
+  // supports both.
+  for (const key of csv(txn).map((t) => t.toLowerCase())) {
+    const test = TXN_FILTERS[key];
+    if (test) rows = rows.filter(test);
+  }
+
+  if (minAge != null) rows = rows.filter((f) => f.ageYears != null && f.ageYears >= minAge);
+  if (maxAge != null) rows = rows.filter((f) => f.ageYears != null && f.ageYears <= maxAge);
+  if (minReturn != null) {
+    const key = String(returnPeriod || "1Y").toUpperCase();
+    rows = rows.filter((f) => f.returns?.[key] != null && f.returns[key] >= minReturn);
+  }
+
   const q = String(search || "").trim().toLowerCase();
   if (q) {
     const terms = q.split(/\s+/);
@@ -289,6 +397,7 @@ function query(list = [], { search = "", category = "", isin = "", scheme_code =
       return terms.every((t) => hay.includes(t));
     });
   }
+  if (sort) rows = sortRows(rows, sort, order);
   return { total: rows.length, lists: rows.slice(start, start + length) };
 }
 

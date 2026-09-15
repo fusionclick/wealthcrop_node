@@ -1,4 +1,4 @@
-const { isTransactable, allowedModes } = require("./scheme");
+const { isTransactable, allowedModes, schemeTransactions } = require("./scheme");
 
 const ALLOWED_TYPES = new Set(["p", "r", "sw"]);
 
@@ -107,14 +107,28 @@ function checkSchemeLimits(order, scheme) {
   if (type === "p" && !isTransactable(scheme)) {
     return { ok: false, error: "This scheme is not open for purchase" };
   }
+  // BSE nests its money rules inside lumpsum[] — `min_lumpsum_amount`/`min_amt`/`minLumpsum`
+  // are fields it has NEVER sent, so `min` was always 0 and this guard has never once
+  // fired. Every under-minimum order went to BSE and came back as a cryptic rejection.
+  // schemeTransactions reads the real numbers, and still tolerates an already-mapped row.
+  const txns = schemeTransactions(scheme);
+  const floor = (row, mapped) => {
+    const v = Number(row?.minAmount ?? mapped ?? 0);
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  };
+
   if (type === "p") {
-    const min = Number(scheme.min_lumpsum_amount ?? scheme.min_amt ?? scheme.minLumpsum ?? 0);
+    const min = floor(txns.lumpsum, scheme.minLumpsum);
     if (min && Number(order.amount) < min) {
       return { ok: false, error: `Minimum investment is ₹${min}` };
     }
+    const max = Number(txns.lumpsum?.maxAmount ?? 0);
+    if (max && Number(order.amount) > max) {
+      return { ok: false, error: `Maximum investment for this scheme is ₹${max}` };
+    }
   }
   if (type === "r" && !order.all_units) {
-    const min = Number(scheme.min_redemption_amount ?? scheme.min_redeem_amt ?? scheme.minRedeem ?? 0);
+    const min = floor(txns.redemption, scheme.minRedeem);
     if (min && Number(order.amount) < min) {
       return { ok: false, error: `Minimum redemption is ₹${min}` };
     }

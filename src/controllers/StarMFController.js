@@ -2,7 +2,9 @@ const { configData, IS_BSE_DEMO } = require("../config");
 const axios = require("axios");
 const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
-const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache } = require("../mf/scheme");
+const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache, schemeTransactions, returnsBoth, rollingReturns, alphaBeta } = require("../mf/scheme");
+const { getEnrichment } = require("../mf/kuvera");
+const { benchmarkSeries } = require("../mf/benchmark");
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
 const { getCatalogue, schemeCategories, AMFI_FALLBACK } = require("../mf/catalogue");
@@ -1270,7 +1272,7 @@ class StarMFController {
       // hai — `total` filter ke baad ki ginti hai, is liye frontend ka page count sach
       // bolta hai. Yahan dobara query() nahi: wo page ko dobara filter kar ke total
       // aur rows ko alag kar deta tha.
-      const { list: lists, total, priced, fetched, unpriced, fields, sample, warming } = await getCatalogue(this, q);
+      const { list: lists, total, priced, fetched, unpriced, fields, sample, warming, enrichment } = await getCatalogue(this, q);
       const lookedUp = q.search || q.isin || q.scheme_code || q.category;
       if (!lists.length && !fetched && !lookedUp) {
         // stale-if-error: kal ka catalogue dikhana 502 se behtar hai.
@@ -1287,7 +1289,10 @@ class StarMFController {
           length: q.length,
           // Every scheme in `lists` is priced; `unpriced` are matured/wound-up
           // schemes dropped from the catalogue, surfaced here for observability.
-          catalogue: { priced, fetched, unpriced, fields, sample },
+          // `enrichment` is how far the risk/age/returns warm pass has got. The risk and
+          // returns FILTERS can only match rows it has already reached, so a client that
+          // wants to be honest about coverage has the numbers to say so.
+          catalogue: { priced, fetched, unpriced, fields, sample, enrichment: enrichment || null },
           // True only while the master index is still building: `total` is then this page's
           // own row count, not the catalogue's. Dropping this flag was what let the
           // warm-up page look like an authoritative answer.
@@ -1369,8 +1374,11 @@ class StarMFController {
 
       if (!scheme) return res.status(404).json({ status: "error", message: "Scheme not found" });
       const mapped = mapScheme(scheme);
-      if (mapped.minSip == null) mapped.minSip = 500;
-      if (mapped.minLumpsum == null) mapped.minLumpsum = 5000;
+      // The 500 / 5000 that used to be pinned on here were the "hardcoded placeholder
+      // values" the ticket calls out: BSE's real minimums live inside lumpsum[]/systematic[]
+      // and mapScheme now reads them. Null still means BSE did not say — the UI omits the
+      // line rather than inventing a floor the exchange never set.
+      const transactions = schemeTransactions(scheme);
 
       let mf = null;
       try {
@@ -1394,6 +1402,27 @@ class StarMFController {
       const categoryAvg = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
       const rank = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
 
+      const series = mf?.series || [];
+      // Both forms of every period (Absolute / CAGR toggle) and the rolling-return
+      // distribution, all from the same real NAV series. Empty series => every value null,
+      // never a fabricated one.
+      const periodReturns = returnsBoth(series);
+      const rolling = rollingReturns(series);
+
+      // Alpha/Beta need the scheme's OWN benchmark, which is the one thing BSE does give us.
+      // Unrecognised benchmark or an unreachable index = no tiles, not invented tiles.
+      let risk = null;
+      try {
+        const bench = await benchmarkSeries(mapped.benchmark);
+        const ab = bench ? alphaBeta(series, bench.series) : null;
+        if (ab) risk = { ...ab, benchmark: bench.label, benchmarkRaw: bench.raw, benchmarkIsPriceIndex: bench.isPriceIndex };
+      } catch (e) {
+        console.warn("[mf] alpha/beta unavailable:", e.message);
+      }
+
+      // Manager, objective and the SEBI risk level — none of them exist in BSE's master.
+      const extra = (await getEnrichment(mapped.scheme_bse_code || scheme_code)) || {};
+
       return res.json({
         status: "success",
         data: {
@@ -1404,10 +1433,26 @@ class StarMFController {
             current_nav: currentNav,
             nav_date: navDate,
             returns,
-            advancedRatios: ratios,
+            advancedRatios: { ...ratios, ...(risk ? { alpha: risk.alpha, beta: risk.beta } : {}) },
             holdings: profile.holdings,
+            risk: mapped.risk || extra.risk || null,
+            riskRank: extra.riskRank ?? null,
+            fundManagers: extra.fundManagers || [],
+            objective: extra.objective || null,
+            factsheetUrl: extra.factsheetUrl || null,
+            fundRating: extra.fundRating ?? null,
+            expense: mapped.expense || extra.expense || null,
+            // "Plan inception": for a scheme older than 2013 the direct plan genuinely
+            // starts 2013-01-01, so this is the plan's birthday, not the fund's.
+            inceptionDate: extra.inceptionDate || periodReturns.inceptionDate || null,
+            ageYears: extra.ageYears ?? periodReturns.years ?? null,
+            transactions,
           },
           returns,
+          periodReturns,
+          rollingReturns: rolling,
+          riskMetrics: risk,
+          transactions,
           chartData,
           synthetic: !realSeries.length,
           holdings: profile.holdings,
@@ -1420,6 +1465,121 @@ class StarMFController {
 
     } catch (error) {
       console.error("Get Scheme Details Error:", error);
+      return res.status(500).json({ status: "error", message: error.message });
+    }
+  };
+
+  /**
+   * Fund comparison — several schemes on one overlapping chart.
+   *
+   * The whole difficulty is inception dates. Two funds launched nine years apart cannot be
+   * drawn on one axis by plotting raw NAV: the y-axis is meaningless across funds (a ₹15
+   * NAV is not "cheaper" than a ₹1,700 one), and the older fund's extra history makes it
+   * look like the younger one collapsed to nothing.
+   *
+   * So: find the latest inception among the funds picked, that is the only window all of
+   * them actually lived through, rebase every fund to 100 on that date, and say in the
+   * response which date that was and which fund set it. A fund with no NAV history at all
+   * comes back with `series: []` and an explicit reason instead of taking the comparison
+   * down with it.
+   */
+  compareSchemes = async (req, res) => {
+    const body = req.body || {};
+    const raw = Array.isArray(body.schemes) ? body.schemes : Array.isArray(body.data?.schemes) ? body.data.schemes : [];
+    // ponytail: each entry is a NAV-history download on a cold cache; five is already a
+    // wide comparison and keeps the endpoint inside nginx's read timeout.
+    const MAX = 5;
+    const picks = raw
+      .map((s) => ({
+        isin: String(s?.isin || s?.scheme_isin || "").trim(),
+        code: String(s?.scheme_code || s?.code || s?.scheme_bse_code || "").trim(),
+      }))
+      .filter((s) => s.isin || s.code)
+      .slice(0, MAX);
+
+    if (picks.length < 2) {
+      return res.status(400).json({ status: "error", message: "Pick at least two schemes to compare" });
+    }
+
+    try {
+      const loaded = await Promise.all(
+        picks.map(async (p) => {
+          let scheme = null;
+          try {
+            scheme = await this.lookupScheme(p.code || p.isin);
+          } catch (e) {
+            console.warn("[mf] compare lookup failed:", p.code || p.isin, e.message);
+          }
+          const mapped = scheme ? mapScheme(scheme) : null;
+          const name = mapped?.name || p.code || p.isin;
+          let series = [];
+          try {
+            const mf = await loadFundNav(p.isin || mapped?.scheme_isin, name);
+            series = mf?.series || [];
+          } catch (e) {
+            console.warn("[mf] compare NAV failed:", name, e.message);
+          }
+          const extra = (await getEnrichment(mapped?.scheme_bse_code || p.code)) || {};
+          return {
+            name,
+            scheme_isin: mapped?.scheme_isin || p.isin || null,
+            scheme_bse_code: mapped?.scheme_bse_code || p.code || null,
+            category: mapped?.category || null,
+            subType: mapped?.subType || null,
+            plan: mapped?.plan || null,
+            nav: mapped?.nav ?? null,
+            risk: mapped?.risk || extra.risk || null,
+            expense: mapped?.expense || extra.expense || null,
+            fundRating: extra.fundRating ?? null,
+            inceptionDate: extra.inceptionDate || null,
+            lockIn: mapped?.lockIn || null,
+            txn: mapped?.txn || null,
+            series,
+          };
+        })
+      );
+
+      const withHistory = loaded.filter((f) => f.series.length > 1);
+      // Latest first-NAV across the picks = the only stretch every one of them existed for.
+      const commonStart = withHistory.length ? Math.max(...withHistory.map((f) => f.series[0].timestamp)) : null;
+      const limiting = commonStart ? withHistory.find((f) => f.series[0].timestamp === commonStart)?.name || null : null;
+
+      const funds = loaded.map((f) => {
+        if (!f.series.length) {
+          return { ...f, series: [], rebased: [], returns: null, unavailable: "No NAV history published for this scheme" };
+        }
+        const window = commonStart ? f.series.filter((p) => p.timestamp >= commonStart) : f.series;
+        const base = window[0]?.nav;
+        const rebased = base > 0 ? window.map((p) => ({ timestamp: p.timestamp, value: parseFloat(((p.nav / base) * 100).toFixed(4)), nav: p.nav })) : [];
+        const { series, ...rest } = f;
+        return {
+          ...rest,
+          points: window.length,
+          rebased,
+          // Trailing returns stay on the fund's own full history — that is what a fund card
+          // means by "3Y". The rebased line is the like-for-like view; these two answer
+          // different questions and the UI labels them separately.
+          returns: returnsBoth(f.series),
+          windowReturn:
+            base > 0 && window.length > 1
+              ? parseFloat((((window[window.length - 1].nav - base) / base) * 100).toFixed(2))
+              : null,
+        };
+      });
+
+      return res.json({
+        status: "success",
+        data: {
+          commonStart: commonStart ? new Date(commonStart * 1000).toISOString().slice(0, 10) : null,
+          // Naming the fund that shortened the window is the difference between "the chart
+          // starts in 2019" and "it starts in 2019 because THIS fund launched then".
+          limitedBy: limiting,
+          rebasedTo: 100,
+          funds,
+        },
+      });
+    } catch (error) {
+      console.error("Compare schemes error:", error);
       return res.status(500).json({ status: "error", message: error.message });
     }
   };

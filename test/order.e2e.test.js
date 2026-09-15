@@ -33,9 +33,62 @@ before(async () => {
 
   controller.loginFunc = async () => ({ status: "success" });
   controller.accessToken = "stub-token";
-  // Scheme the order references — mirrors a real BSE master row.
+  // Scheme the order references — the real BSE master shape, verified live against
+  // starmfv2demo with fields:["ALL"].
+  //
+  // It used to be `min_lumpsum_amount: 5000, min_redemption_amount: 1000` at the top level,
+  // and those two fields DO NOT EXIST in BSE's response. The minimum-amount guard read them,
+  // always got undefined, and so never rejected anything — while this test passed, because
+  // the fixture invented the fields the code was looking for. BSE nests its money rules
+  // inside lumpsum[] / systematic[], one row per transaction type.
+  const txnRow = (type, minAmt, cutoff = "14:30:00") => ({
+    scheme_transaction_type: type,
+    scheme_transaction_type_tag_name: type,
+    scheme_transaction_cutoff_time: cutoff,
+    scheme_transaction_effective_start_date: "2010-07-19T00:00:00",
+    scheme_transaction_effective_end_date: "2037-12-31T00:00:00",
+    scheme_transaction_mode_allowed: [{ scheme_transaction_mode_demat_physical_allowed: "Demat" }],
+    scheme_transaction_single_details: {
+      scheme_transaction_amt: {
+        scheme_transaction_min_amt: minAmt,
+        scheme_transaction_min_adtnl_amt: minAmt,
+        scheme_transaction_max_amt: 100000000000,
+        scheme_transaction_mult_amt: 1,
+      },
+      scheme_transaction_units: { scheme_transaction_min_unit: 0, scheme_transaction_max_unit: 0, scheme_transaction_mult_unit: 0 },
+    },
+  });
   controller.masterDataService.getSchemeMasterList = async () => ({
-    data: { count: 1, lists: [{ scheme_name: "SBI ESG GROWTH", scheme_isin: "INF200K01214", scheme_bse_code: "007G", min_lumpsum_amount: 5000, min_redemption_amount: 1000, purchase_allowed: "Y", scheme_status: "active" }] },
+    data: {
+      count: 1,
+      lists: [
+        {
+          scheme_name: "SBI ESG GROWTH",
+          scheme_isin: "INF200K01214",
+          scheme_bse_code: "007G",
+          purchase_allowed: "Y",
+          scheme_status: "active",
+          lumpsum: [txnRow("Purchase", 5000), txnRow("Redemption", 1000, "15:00:00")],
+          systematic: [
+            {
+              scheme_transaction_type: "SIP",
+              scheme_sxp_frequency: "Monthly",
+              scheme_sxp_frequency_detail: { scheme_sxp_frequency_type: "dates", scheme_sxp_frequency_values: [1, 5, 10, 15, 20, 25] },
+              scheme_transaction_allowed_options: { scheme_sxp_registration_allowed: true, scheme_sxp_paused: true, scheme_sxp_first_order_today_allowed: true },
+              scheme_transaction_effective_start_date: "2015-12-04T00:00:00",
+              scheme_transaction_effective_end_date: "2037-12-31T00:00:00",
+              scheme_transaction_mode_allowed: [{ scheme_transaction_mode_demat_physical_allowed: "Demat" }],
+              systematic_transaction_detail: [
+                {
+                  scheme_sxp_installment_numbers: { scheme_sxp_min_installments: 12, scheme_sxp_max_installments: 9999 },
+                  scheme_transaction_amt: { scheme_transaction_min_amt: 500, scheme_transaction_max_amt: 999999999, scheme_transaction_mult_amt: 1 },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
   });
   // Demat details BSE holds against the UCC — stubbed like every other BSE call here,
   // otherwise the order path reaches out to the real gateway.
