@@ -15,6 +15,7 @@
     "bse-starmfv2-sdk": "file:bse-starmfv2-sdk-1.0.0.tgz",
     "cors": "^2.8.6",
     "express": "^4.21.2",
+    "pdfjs-dist": "^4.10.38",
     "socket.io": "^4.8.3"
   }
 }

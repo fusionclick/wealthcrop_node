@@ -12,6 +12,7 @@ const { getHidden, isHidden } = require("../mf/hidden");
 const { getAmfiNavs } = require("../mf/amfiNav");
 const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE } = require("../mf/order");
 const { kycFromUcc, uccPan, investorPan } = require("../mf/kyc");
+const { pdfLines, parseCas, casHoldings } = require("../mf/cas");
 const {
   buildXspRegisterPayload,
   validateSip,
@@ -941,6 +942,100 @@ class StarMFController {
   /** The disclaimer text the checkout screens render, and which of them must be ticked. */
   disclaimers = async (_req, res) =>
     res.json({ status: "success", data: { disclaimers: DISCLAIMERS, required: REQUIRED_ACKS } });
+
+  /**
+   * Ticket 16 — read a CAMS/KFintech CAS and return the holdings in it.
+   *
+   * Read-only by design: the parsed rows go back to the browser, which saves the ones the
+   * investor ticks through the external-portfolio endpoint it already uses. So an import
+   * that half-works leaves nothing behind to clean up, and a re-import is free.
+   */
+  casImport = async (req, res) => {
+    const body = req.body || {};
+    // Accepts a bare base64 string or a FileReader data URL, since the browser produces
+    // the latter and stripping it there would be one more thing to get wrong.
+    const base64 = String(body.file || body.pdf || "").replace(/^data:[^;]*;base64,/, "");
+    if (!base64) {
+      return res.status(400).json({ status: "error", message: "Attach your CAS PDF." });
+    }
+    const pdf = Buffer.from(base64, "base64");
+    // %PDF- is the file's own magic number — a renamed .jpg is caught here rather than
+    // inside pdfjs, and an empty or garbled base64 never reaches the parser at all.
+    if (pdf.length < 1000 || pdf.subarray(0, 5).toString("latin1") !== "%PDF-") {
+      return res.status(400).json({ status: "error", message: "That file is not a PDF." });
+    }
+
+    let parsed;
+    try {
+      parsed = parseCas(await pdfLines(pdf, body.password));
+    } catch (e) {
+      if (e.code === "cas_password" || e.code === "cas_not_pdf") {
+        return res.status(400).json({ status: "error", code: e.code, message: e.message });
+      }
+      console.error("[cas] parse failed:", e.message);
+      return res.status(500).json({ status: "error", message: "Could not read that statement." });
+    }
+
+    // The statement belongs to whoever's PAN is printed on it. Refuse a mismatch outright.
+    // A null on either side means "not known", and follows uccPan's rule — log it, do not
+    // 403 every investor whose profile happens to carry no PAN.
+    const mine = investorPan(req.investor);
+    if (mine && parsed.pan && mine !== parsed.pan) {
+      return res.status(403).json({
+        status: "error",
+        code: "cas_pan_mismatch",
+        message: "This statement is issued to a different PAN.",
+      });
+    }
+    if (!mine || !parsed.pan) {
+      console.warn("[cas] PAN not compared — investor:", Boolean(mine), "statement:", Boolean(parsed.pan));
+    }
+
+    const holdings = casHoldings(parsed);
+    if (!holdings.length) {
+      return res.json({
+        status: "success",
+        data: {
+          period: parsed.period,
+          holdings: [],
+          message:
+            "No open holdings found. Ask CAMS/KFintech for the detailed statement with transactions, for the period 'since inception'.",
+        },
+      });
+    }
+
+    // Link each row to the catalogue by ISIN so it gets the live NAV, the BSE code the NAV
+    // socket keys on, and a category — exactly what the Add Fund form attaches when an
+    // investor picks a scheme by hand. A fund the catalogue does not carry is still
+    // returned: it keeps the NAV printed on the statement, which is better than nothing.
+    for (const row of holdings) {
+      if (!row.scheme_isin) continue;
+      try {
+        const { list, warming } = await getCatalogue(this, { isin: row.scheme_isin, length: 1 });
+        // Index still building: every further lookup would be one more BSE page fetch, so a
+        // 30-holding statement would make thirty of them. Stop — the statement's own NAV is
+        // on every row already, and the page re-fetches a missing NAV by itself later
+        // (ensureExternalNav, the same path a hand-added holding uses).
+        if (warming) {
+          console.warn("[cas] catalogue still warming — importing on statement NAVs");
+          break;
+        }
+        const match = list?.[0];
+        if (!match) continue;
+        row.scheme_bse_code = match.scheme_bse_code || "";
+        row.scheme_category = match.category || "";
+        row.matched_name = match.name || "";
+        if (Number(match.nav) > 0) row.nav = Number(match.nav);
+      } catch (e) {
+        console.warn("[cas] catalogue lookup failed for", row.scheme_isin, e.message);
+      }
+    }
+
+    return res.json({
+      status: "success",
+      data: { period: parsed.period, pan: parsed.pan, holdings },
+    });
+  };
 
   // XSP Methods
   xspRegister = async (req, res) => {

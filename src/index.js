@@ -35,6 +35,10 @@ app.use(
   })
 );
 app.options("*", cors({ origin: allowedOrigins }));
+// A CAS PDF arrives base64 in the body, so this one route needs room. Registered first
+// because express.json() skips a request whose body is already parsed — every other route
+// therefore keeps the 100kb default rather than the whole API inheriting a 25mb ceiling.
+app.use("/api/cas/import", express.json({ limit: "25mb" }));
 app.use(express.json());
 
 app.use((req, res, next) => {

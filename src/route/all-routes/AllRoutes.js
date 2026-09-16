@@ -30,6 +30,12 @@ router.post("/getXspTrxnHistory", ...auth, StarMFController.getXspTrxnHistory);
 // BSE has no sxp_update — modify is register-then-cancel, in that order, server-side.
 router.post("/modifyXsp", ...auth, StarMFController.modifyXsp);
 
+// Ticket 16: read a CAMS/KFintech statement and hand back the holdings in it. Nothing is
+// stored here — the rows go to Laravel's external-portfolio table, the same one the
+// "Add Fund" form writes to, so requireInvestor (not ...auth) is the right gate: there is
+// no UCC in a CAS, and an investor with no BSE account can still import one.
+router.post("/cas/import", requireInvestor, StarMFController.casImport);
+
 // Orders
 // The statutory text the checkout screens render, and which of them must be ticked. Public:
 // it is a regulatory notice, and gating it behind a login would only mean showing it later.
