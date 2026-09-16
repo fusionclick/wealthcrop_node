@@ -54,31 +54,95 @@ function installmentsBetween(start, end, freq) {
   return Math.max(1, Math.min(MAX_INSTALLMENTS, Math.round(years * perYear)));
 }
 
-function validateSip(input = {}, { minSip = 500 } = {}) {
-  if (!String(input.scheme || "").trim()) return "Choose a fund before starting a SIP";
-  const amount = Number(input.amount);
-  if (!Number.isFinite(amount) || amount <= 0) return "Enter a SIP amount";
-  if (amount < minSip) return `Minimum SIP for this fund is ₹${minSip}`;
-  if (!FREQ[String(input.freq || "m")]) return "Choose a valid SIP frequency";
+/**
+ * ─── SIP, SWP and STP are all one BSE call (tickets 17, 18) ──────────────────────────────
+ *
+ * The SDK exposes a single /sxp_register and BSE switches on `sxp_type`. So STP and SWP are
+ * not new plumbing, they are the same registration with a different type and one or two
+ * extra fields — which is why they are built here rather than in three near-identical
+ * functions that would drift apart the first time BSE changed a rule.
+ *
+ *   sip  src_scheme, amount                       money in, on a schedule
+ *   swp  src_scheme, src_folio, amount OR units   money out, on a schedule
+ *   stp  src_scheme, dest_scheme, src_folio, amt  moved between two schemes, on a schedule
+ *
+ * A folio is what makes the difference: a SIP creates a holding, while a SWP and an STP
+ * take from one that already exists, and an investor can hold the same scheme in several
+ * folios. BSE cannot guess which.
+ */
+const SXP_TYPES = ["sip", "swp", "stp"];
+const LABEL = { sip: "SIP", swp: "SWP", stp: "STP" };
+
+const sxpTypeOf = (input = {}) => {
+  const t = String(input.sxp_type || input.type || "sip").trim().toLowerCase();
+  return SXP_TYPES.includes(t) ? t : null;
+};
+
+/**
+ * @param opts.minSip     the scheme's own minimum, when known
+ * @param opts.available  units the investor actually holds in this folio (SWP/STP only)
+ */
+function validateSxp(input = {}, { minSip = 500, available = null } = {}) {
+  const type = sxpTypeOf(input);
+  if (!type) return "Choose a valid instruction type";
+  const what = LABEL[type];
+
+  if (!String(input.scheme || "").trim()) return `Choose a fund before starting a ${what}`;
+  if (type === "stp" && !String(input.dest_scheme || "").trim()) {
+    return "Choose the fund to transfer into";
+  }
+  if (type === "stp" && String(input.dest_scheme).trim() === String(input.scheme).trim()) {
+    return "The source and destination funds must be different";
+  }
+  // Ticket 18: a withdrawal has to come out of a folio the investor holds. Without one BSE
+  // has no way to know which holding to sell from.
+  if ((type === "swp" || type === "stp") && !String(input.folio || input.src_folio || "").trim()) {
+    return `Choose the folio to ${type === "swp" ? "withdraw from" : "transfer from"}`;
+  }
+
+  const byUnits = input.isunits === true || input.all_units === true;
+  if (byUnits) {
+    if (input.all_units !== true) {
+      const units = Number(input.units);
+      if (!Number.isFinite(units) || units <= 0) return "Enter how many units to withdraw";
+      if (available != null && units > available) {
+        return `You hold ${available} units in this folio. Withdraw that or less.`;
+      }
+    }
+  } else {
+    const amount = Number(input.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return `Enter a ${what} amount`;
+    // The scheme minimum is a purchase floor. A withdrawal is not buying anything, so it
+    // does not apply — BSE enforces its own SWP/STP minimums from systematic[].
+    if (type === "sip" && amount < minSip) return `Minimum SIP for this fund is ₹${minSip}`;
+  }
+
+  if (!FREQ[String(input.freq || "m")]) return `Choose a valid ${what} frequency`;
   const start = isoDay(input.start_date);
-  if (!start) return "Choose a SIP start date";
+  if (!start) return `Choose a ${what} start date`;
   const day = Number(input.txn_date);
-  if (!Number.isInteger(day) || day < 1 || day > 28) return "Choose a SIP date between 1 and 28";
+  if (!Number.isInteger(day) || day < 1 || day > 28) return `Choose a ${what} date between 1 and 28`;
   // BSE ties the two together (msgid 3809). The form keeps them in step, so this is the
   // backstop for anything that posts them out of step.
   if (Number(start.slice(8, 10)) !== day) {
-    return `SIP date and start date must be the same day of the month — start on the ${day}${ordinal(day)}`;
+    return `${what} date and start date must be the same day of the month — start on the ${day}${ordinal(day)}`;
   }
   const installments = Number(input.ninstallments) || installmentsBetween(start, isoDay(input.end_date), String(input.freq || "m"));
-  if (!installments) return "Choose a SIP end date after the start date";
+  if (!installments) return `Choose a ${what} end date after the start date`;
   return null;
 }
 
+// The name this codebase already calls everywhere. A SIP is the default type, so the old
+// signature keeps working unchanged.
+const validateSip = (input, opts) => validateSxp({ sxp_type: "sip", ...input }, opts);
+
 /**
- * @param input  browser intent: scheme, amount, freq, txn_date, start_date, end_date
+ * @param input  browser intent: sxp_type, scheme, dest_scheme, folio, amount/units, freq,
+ *               txn_date, start_date, end_date
  * @param ctx    ucc + memberCode from the session, dp/client id from stored KYC, email
  */
 function buildXspRegisterPayload(input = {}, { ucc, memberCode, email, dpId, clientId } = {}) {
+  const type = sxpTypeOf(input) || "sip";
   const freq = String(input.freq || "m");
   const start = isoDay(input.start_date);
   const end = isoDay(input.end_date);
@@ -90,14 +154,22 @@ function buildXspRegisterPayload(input = {}, { ucc, memberCode, email, dpId, cli
   const client = String(clientId || "").trim();
   const hasDp = Boolean(dp && client);
 
+  const folio = String(input.folio || input.src_folio || "").trim();
+  const byUnits = input.isunits === true || input.all_units === true;
+
   const data = {
-    sxp_type: "sip",
-    mem_sxp_ref_id: `SIP${Date.now()}`,
+    sxp_type: type,
+    mem_sxp_ref_id: `${LABEL[type]}${Date.now()}`,
     investor: { ucc },
     member: String(memberCode),
     src_scheme: String(input.scheme).trim(),
-    amount: Number(input.amount),
-    cur: "INR",
+    ...(type === "stp" ? { dest_scheme: String(input.dest_scheme).trim() } : {}),
+    // Never an empty string — "" is not a valid value anywhere in this API, and one of them
+    // poisons the whole request.
+    ...(folio ? { src_folio: folio } : {}),
+    ...(byUnits
+      ? { isunits: true, all_units: input.all_units === true, ...(input.all_units === true ? {} : { units: Number(input.units) }) }
+      : { amount: Number(input.amount), cur: "INR" }),
     is_fresh: true,
     kyc_passed: true,
     dpc: true,
@@ -106,7 +178,7 @@ function buildXspRegisterPayload(input = {}, { ucc, memberCode, email, dpId, cli
     freq,
     // Taken from start_date, not from the caller: BSE rejects the pair when they disagree
     // (invalid_txn_date, 3809), so deriving it makes that impossible rather than merely
-    // validated. validateSip still reports the mismatch so the investor sees why.
+    // validated. validateSxp still reports the mismatch so the investor sees why.
     txn_date: Number(start.slice(8, 10)),
     ninstallments,
     holder: [{ holder_rank: "1", ...(email ? { email } : {}) }],
@@ -257,6 +329,9 @@ function mergeSipChanges(existing = {}, changes = {}) {
 module.exports = {
   buildXspRegisterPayload,
   validateSip,
+  validateSxp,
+  sxpTypeOf,
+  SXP_TYPES,
   installmentsBetween,
   FREQ,
   xspRegNo,

@@ -15,6 +15,8 @@ const { kycFromUcc, uccPan, investorPan } = require("../mf/kyc");
 const {
   buildXspRegisterPayload,
   validateSip,
+  validateSxp,
+  sxpTypeOf,
   xspRegNo,
   buildCancelXspPayload,
   buildPauseXspPayload,
@@ -112,18 +114,23 @@ const bseMessage = (error) => {
 const cell = (v) => String(v ?? "").trim();
 
 /**
- * SIP-vs-everything-else, decided here because BSE will not decide it for us: `/sxp_list`
- * rejects any `filter_param` key, `sxp_type` included (see buildXspListPayload).
+ * Which type, and is it live — decided here because BSE will not decide it for us:
+ * `/sxp_list` rejects any `filter_param` key, `sxp_type` included (see buildXspListPayload).
  *
  * Fail-open on purpose. The demo book has no XSP rows, so the exact field names are
  * unconfirmed; a row is dropped only when a field we recognise is present AND clearly says
  * something else. An unknown shape stays visible — showing an STP by mistake is a cosmetic
  * bug, hiding somebody's real SIP is not. Confirm the field names against a prod account
  * with live SIPs and this can tighten.
+ *
+ * @param want  "sip" | "swp" | "stp", or null for every type. Tickets 17 and 18 gave SWP
+ *   and STP their own pages, and each wants only its own rows — but they arrive from the
+ *   same /sxp_list call, so the narrowing has to happen here.
  */
-const isActiveSip = (item) => {
+const isActiveSxp = (item, want = "sip") => {
   const type = cell(item?.sxp_type || item?.xsp_type || item?.type);
-  if (type && !/^sip$/i.test(type)) return false;
+  // STP rows come back as STP-IN / STP-OUT, so match the prefix rather than the whole word.
+  if (want && type && !new RegExp(`^${want}\\b|^${want}-`, "i").test(type)) return false;
   const status = cell(item?.status || item?.sxp_status || item?.xsp_status);
   if (status && /cancel|close|expire|reject|fail|stop/i.test(status)) return false;
   return true;
@@ -138,8 +145,9 @@ const isActiveSip = (item) => {
  *   such SIP on this account", which is both untrue and unhelpful. Scoping by UCC is the
  *   security half and is never optional; the SIP-vs-STP / live-vs-dead filter is the
  *   cosmetic half and is what this turns off.
+ * @param type  which sxp_type to keep; null keeps every type.
  */
-const scopeXspResponse = (response, ucc, { activeOnly = true } = {}) => {
+const scopeXspResponse = (response, ucc, { activeOnly = true, type = "sip" } = {}) => {
   const data = response?.data;
   if (!data || typeof data !== "object") return response;
   const key = Array.isArray(data.lists) ? "lists" : Array.isArray(data.items) ? "items" : null;
@@ -148,7 +156,7 @@ const scopeXspResponse = (response, ucc, { activeOnly = true } = {}) => {
   const rows = data[key].filter(
     (item) =>
       [item?.ucc, item?.ucc_code, item?.client_code, item?.investor_ucc, item?.investor?.ucc, item?.investor?.client_code]
-        .some((value) => cell(value) === expected) && (!activeOnly || isActiveSip(item))
+        .some((value) => cell(value) === expected) && (!activeOnly || isActiveSxp(item, type))
   );
   // total_count is BSE's pre-filter number; leaving it would overstate what we returned.
   return { ...response, data: { ...data, [key]: rows, count: rows.length, total_count: rows.length } };
@@ -944,16 +952,39 @@ class StarMFController {
 
     const input = req.body?.data || req.body || {};
     const scheme = String(input.scheme || input.src_scheme || "").trim();
-    const invalid = validateSip({ ...input, scheme });
+    // Tickets 17 and 18: SIP, SWP and STP are one BSE call switching on sxp_type, so this
+    // one endpoint registers all three rather than three that would drift apart.
+    const type = sxpTypeOf(input);
+    if (!type) return res.status(400).json({ status: "error", message: "Choose a valid instruction type" });
+
+    // Ticket 18: "available units/balance must be validated". The holding is BSE's word,
+    // not the browser's — a page that believes it holds 900 units does not make it so.
+    let available = null;
+    if (type === "swp" || type === "stp") {
+      available = await this.unitsHeld(ucc, scheme, input.folio || input.src_folio);
+      if (available === 0) {
+        return res.status(400).json({
+          status: "error",
+          message: "You hold no units in that folio for this scheme.",
+        });
+      }
+    }
+
+    const invalid = validateSxp({ ...input, sxp_type: type, scheme }, { available });
     if (invalid) return res.status(400).json({ status: "error", message: invalid });
 
-    // A SIP is a purchase instruction repeated, so it gets the same gates a lumpsum does.
-    const gate = await this.gateOrder(req, await this.lookupScheme(scheme));
-    if (gate) return res.status(403).json(gate);
+    // A SIP and an STP both BUY — repeatedly — so they take the same gates a lumpsum does,
+    // and an STP is judged on the fund it buys into. A SWP only sells, so it is exempt for
+    // the same reason a redemption is: gating it would trap the investor.
+    if (type !== "swp") {
+      const target = await this.lookupScheme(type === "stp" ? input.dest_scheme : scheme);
+      const gate = await this.gateOrder(req, target);
+      if (gate) return res.status(403).json(gate);
+    }
 
     const kyc = req.investor?.kyc || {};
     const reqObj = buildXspRegisterPayload(
-      { ...input, scheme },
+      { ...input, sxp_type: type, scheme },
       {
         ucc,
         memberCode: this.memberCode,
@@ -966,8 +997,13 @@ class StarMFController {
   };
   getAllXsp = async (req, res) => {
     const ucc = req.ucc || investorUcc(req.investor);
+    // SIP unless asked otherwise, so every existing caller keeps the list it had. The SWP
+    // and STP pages ask for their own type; /sxp_list cannot filter, so this does.
+    const type = sxpTypeOf({ sxp_type: req.body?.data?.sxp_type || req.body?.sxp_type }) || "sip";
     const reqObj = buildXspListPayload(req.body?.data, ucc);
-    return this.handleTrxnRequest("getAllXsp", reqObj, res, (response) => scopeXspResponse(response, ucc));
+    return this.handleTrxnRequest("getAllXsp", reqObj, res, (response) =>
+      scopeXspResponse(response, ucc, { type })
+    );
   };
 
   /**
@@ -1254,6 +1290,40 @@ class StarMFController {
     }
     return this.handleTrxnRequest("getOrder", req.body, res);
   };
+
+  /**
+   * Units this UCC actually holds in a scheme, optionally narrowed to one folio.
+   *
+   * Ticket 18's "available units/balance must be validated" — against BSE, not against
+   * whatever the page believes. Returns null when the holdings cannot be read, which is
+   * "unknown" and lets the order through to BSE's own check; returning 0 there would
+   * reject a real holding because a list call timed out.
+   */
+  async unitsHeld(ucc, schemeCode, folio) {
+    const want = String(schemeCode || "").trim().toUpperCase();
+    if (!ucc || !want) return null;
+    const result = await this.callTrxn("getAllOrders", {
+      data: {
+        fields: ["ALL"],
+        start: 0,
+        length: 100,
+        filter_param: { ucc: [ucc], member_code: this.memberCode, open_close: "o" },
+      },
+    });
+    if (result?._status) return null;
+    const HELD = new Set(["ALLOTTED", "ACCEPTED", "PAID"]);
+    const rows = result?.data?.lists || result?.data?.items || result?.items || [];
+    const wantFolio = String(folio || "").trim();
+    const mine = rows.filter((o) => {
+      if (o?.status && !HELD.has(String(o.status).toUpperCase())) return false;
+      const code = String(o?.scheme || o?.scheme_code || o?.scheme_bse_code || "").trim().toUpperCase();
+      if (code !== want) return false;
+      if (!wantFolio) return true;
+      return String(o?.folio_num || o?.folio || "").trim() === wantFolio;
+    });
+    // No matching row is a real answer — nothing is held here — unlike an unreadable list.
+    return mine.reduce((sum, o) => sum + (Number(o.units) || 0), 0);
+  }
 
   getClientPortfolio = async (req, res) => {
     try {

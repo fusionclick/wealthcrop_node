@@ -100,6 +100,21 @@ describe("scopeXspResponse", () => {
     assert.deepEqual(r.data.lists.map((x) => x.id), [1, 2]);
   });
 
+  it("SWP aur STP pages apni hi rows maangte hain (tickets 17, 18)", () => {
+    // Teeno ek hi /sxp_list se aati hain, is liye narrowing yahin hoti hai.
+    const book = rows([
+      { ucc: "A1", id: 1, sxp_type: "SIP", status: "ACTIVE" },
+      { ucc: "A1", id: 2, sxp_type: "SWP", status: "ACTIVE" },
+      // BSE STP ko STP-IN / STP-OUT likhta hai — poora lafz match karne se yeh chhoot jati.
+      { ucc: "A1", id: 3, sxp_type: "STP-OUT", status: "ACTIVE" },
+      { ucc: "A1", id: 4, sxp_type: "STP-IN", status: "CANCELLED" },
+    ]);
+    assert.deepEqual(scopeXspResponse(book, "A1", { type: "swp" }).data.lists.map((x) => x.id), [2]);
+    assert.deepEqual(scopeXspResponse(book, "A1", { type: "stp" }).data.lists.map((x) => x.id), [3]);
+    // type: null = har qism, magar band ho chuki registrations phir bhi bahar.
+    assert.deepEqual(scopeXspResponse(book, "A1", { type: null }).data.lists.map((x) => x.id), [1, 2, 3]);
+  });
+
   it("anjaan shape ko chhoota nahi", () => {
     const odd = { status: "success", data: { total: 0 } };
     assert.equal(scopeXspResponse(odd, "A1"), odd);
