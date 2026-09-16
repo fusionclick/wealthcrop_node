@@ -60,7 +60,28 @@ describe("catalogue", () => {
     // from a feed. Holdings and sector weights live in each AMC's monthly portfolio
     // disclosure, which neither AMFI, BSE StarMF nor Kotak Neo exposes to us, so the
     // charts are hidden rather than filled with invention.
-    assert.deepEqual(fundProfile(), { holdings: [], assetSplit: [], sectors: [], aumLabel: null });
+    // No uploaded portfolio for this scheme: empty arrays, so the fund page hides each
+    // section exactly as it did when there was no source at all.
+    assert.deepEqual(fundProfile(), {
+      holdings: [],
+      assetSplit: [],
+      sectors: [],
+      holdingsAsOf: null,
+      aumLabel: null,
+    });
+
+    // With one, it passes straight through — including the disclosure date, because a
+    // portfolio shown without its "as of" reads as today's positions.
+    const withPortfolio = fundProfile({
+      asOf: "2026-08-31",
+      holdings: [{ name: "HDFC Bank Ltd.", sector: "Financial", instrument: "Equity", pct: 7.55, value: null }],
+      assetSplit: [{ name: "Equity", value: 7.55 }],
+      sectors: [{ name: "Financial", value: 7.55 }],
+    });
+    assert.equal(withPortfolio.holdings.length, 1);
+    assert.equal(withPortfolio.holdings[0].name, "HDFC Bank Ltd.");
+    assert.equal(withPortfolio.holdingsAsOf, "2026-08-31");
+    assert.deepEqual(withPortfolio.sectors, [{ name: "Financial", value: 7.55 }]);
   });
 
   it("risk ratios are measured from the NAV series, not from constants", () => {

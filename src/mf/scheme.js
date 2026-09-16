@@ -635,12 +635,19 @@ function rankInPeers(mine, peers = [], key) {
  * all. So there is nothing to compute here and inventing it on an investment platform is
  * worse than showing nothing.
  *
- * Empty arrays. The fund page already hides each section when its array is empty. Wire a
- * real portfolio-disclosure source (a data vendor, or per-AMC monthly files) and fill
- * these in; the charts light up again with no UI change.
+ * That source now exists: `holdings.js` reads the AMC's monthly disclosure as uploaded
+ * through the admin panel, because no feed this platform reaches publishes it. This is the
+ * shape adapter between the two — the fund page hides each section when its array is empty,
+ * so a scheme with no uploaded portfolio behaves exactly as it did before.
  */
-function fundProfile() {
-  return { holdings: [], assetSplit: [], sectors: [], aumLabel: null };
+function fundProfile(uploaded = null) {
+  return {
+    holdings: uploaded?.holdings || [],
+    assetSplit: uploaded?.assetSplit || [],
+    sectors: uploaded?.sectors || [],
+    holdingsAsOf: uploaded?.asOf || null,
+    aumLabel: null,
+  };
 }
 
 /**

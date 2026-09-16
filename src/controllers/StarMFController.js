@@ -28,6 +28,7 @@ const {
 } = require("../mf/xsp");
 const { checkSuitability, checkDisclaimers, DISCLAIMERS, REQUIRED_ACKS } = require("../mf/suitability");
 const { getRiskPolicy } = require("../mf/riskPolicy");
+const { getHoldings } = require("../mf/holdings");
 const { mapBseErrors } = require("../mf/bseFieldErrors");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
@@ -1847,7 +1848,10 @@ class StarMFController {
       const realSeries = mf?.chartData?.length ? mf.chartData : [];
       const chartData = realSeries.length ? realSeries : buildChartSeries(currentNav, returns);
 
-      const profile = fundProfile();
+      // Ticket 5 — the AMC's monthly portfolio disclosure, as uploaded through the admin
+      // panel. Fail-open: no upload for this scheme means the holdings sections stay hidden,
+      // exactly as before.
+      const profile = fundProfile(await getHoldings(mapped.scheme_isin, mapped.scheme_bse_code || scheme_code));
       const ratios = ratiosFromSeries(mf?.series || []);
       // ponytail: skip peer NAV fan-out — nginx times out scheme-details
       const categoryAvg = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
@@ -1939,6 +1943,8 @@ class StarMFController {
           holdings: profile.holdings,
           assetSplit: profile.assetSplit,
           sectors: profile.sectors,
+          // A portfolio is a point-in-time fact; the page says which month it is showing.
+          holdingsAsOf: profile.holdingsAsOf,
           categoryAvg,
           rank,
         }
