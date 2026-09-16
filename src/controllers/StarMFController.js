@@ -1070,9 +1070,25 @@ class StarMFController {
     return run(sip, regNo, req.body?.data || req.body || {});
   }
 
+  /**
+   * The registration's own type, as BSE recorded it.
+   *
+   * These calls all used to send a hardcoded "SIP", which was true while a SIP was the only
+   * thing that could be registered. Now that an SWP or an STP can be, naming the wrong type
+   * on a real reg_no is how a cancel silently fails. The row is BSE's own, so this never
+   * takes the browser's word for it. Unknown stays "SIP" — the behaviour every existing
+   * registration already gets.
+   */
+  static sxpTypeOfRow = (row = {}) =>
+    String(row.sxp_type || row.xsp_type || row.type || "SIP").trim().toUpperCase() || "SIP";
+
   getXsp = async (req, res) =>
     this.withOwnedSip(req, res, (sip, regNo) =>
-      this.handleTrxnRequest("getXsp", { data: { reg_no: regNo, sxp_type: "SIP" } }, res)
+      this.handleTrxnRequest(
+        "getXsp",
+        { data: { reg_no: regNo, sxp_type: StarMFController.sxpTypeOfRow(sip) } },
+        res
+      )
     );
 
   getXspTrxnHistory = async (req, res) =>
@@ -1104,7 +1120,11 @@ class StarMFController {
       if (/cancel|close|expire|stop/.test(status)) {
         return res.status(409).json({ status: "error", message: "This SIP is already cancelled." });
       }
-      return this.handleTrxnRequest("cancelXsp", buildCancelXspPayload(regNo, { reason: input.reason }), res);
+      return this.handleTrxnRequest(
+        "cancelXsp",
+        buildCancelXspPayload(regNo, { reason: input.reason, sxpType: StarMFController.sxpTypeOfRow(sip) }),
+        res
+      );
     });
 
   pauseXsp = async (req, res) =>
