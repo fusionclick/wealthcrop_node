@@ -117,4 +117,154 @@ function buildXspRegisterPayload(input = {}, { ucc, memberCode, email, dpId, cli
   return { data };
 }
 
-module.exports = { buildXspRegisterPayload, validateSip, installmentsBetween, FREQ };
+/**
+ * ─── Managing a SIP that already exists (tickets 19, 20, 21) ────────────────────────────
+ *
+ * Every one of these used to be `req.body` forwarded to BSE untouched, with a hardcoded
+ * demo payload substituted when the body was empty. That is the same hole bindUcc closes
+ * for orders, and worse here: nothing checked that the reg_no belonged to the caller, so
+ * any signed-in investor could cancel, pause or top up **anyone's** SIP by guessing one.
+ * The ownership check lives in the controller (it needs a BSE round trip); these functions
+ * build the payloads, so a caller can no longer name fields BSE should not hear from a
+ * browser.
+ *
+ * Field names are BSE's own, from requestData/xspRequestData.js. Note topup uses `reg_num`
+ * where every sibling call uses `reg_no` — not a typo here.
+ */
+
+// BSE spells the registration id several ways across sxp_list / sxp_get. Read them all.
+const xspRegNo = (row = {}) =>
+  String(row.reg_no ?? row.reg_num ?? row.sxp_id ?? row.id ?? "").trim();
+
+// sxp_cancel reason codes. 6 is "cancelled by investor", the only one this product has a
+// mandate for — the rest are member/AMC-initiated and are not ours to send.
+const CANCEL_BY_INVESTOR = 6;
+
+function buildCancelXspPayload(regNo, { reason = "", sxpType = "SIP" } = {}) {
+  return {
+    data: {
+      reg_no: String(regNo),
+      reason_cd: CANCEL_BY_INVESTOR,
+      // BSE rejects an empty string as an enum value all over this API, but reason_cd_msg
+      // is free text — the demo payload sends "". Kept only when the investor typed one.
+      ...(String(reason).trim() ? { reason_cd_msg: String(reason).trim().slice(0, 200) } : {}),
+      sxp_type: String(sxpType).toUpperCase(),
+    },
+  };
+}
+
+function buildPauseXspPayload(regNo, { installments, from } = {}) {
+  const n = Number(installments);
+  const day = isoDay(from);
+  return {
+    data: {
+      reg_no: String(regNo),
+      ninstallments: Number.isInteger(n) && n > 0 ? n : 1,
+      ...(day ? { paused_from: day } : {}),
+    },
+  };
+}
+
+function buildResumeXspPayload(regNo, { reason = "" } = {}) {
+  return {
+    data: {
+      reg_no: String(regNo),
+      resume_reason: String(reason).trim().slice(0, 200) || "Resumed by investor",
+    },
+  };
+}
+
+/**
+ * Ticket 19 — Top-Up.
+ *
+ * A BSE top-up is its own dated, recurring instruction (its own amount, frequency and
+ * dates) layered on the registration; it is not an edit of the parent SIP's amount. So the
+ * parent's amount, dates and frequency are never touched here — which is exactly what
+ * "existing SIP details must remain unchanged except for the configured Top-Up" asks for.
+ */
+function buildTopupXspPayload(regNo, input = {}, { email } = {}) {
+  const start = isoDay(input.start_date);
+  const end = isoDay(input.end_date);
+  return {
+    data: {
+      reg_num: String(regNo), // reg_num, not reg_no — BSE's spelling on this endpoint only
+      mem_sxp_ref_id: `TOP${Date.now()}`,
+      amount: Number(input.amount),
+      cur: "INR",
+      ...(start ? { start_date: start } : {}),
+      ...(end ? { end_date: end } : {}),
+      freq: String(input.freq || "y"),
+      ...(start ? { txn_date: Number(start.slice(8, 10)) } : {}),
+      ...(String(input.remark || "").trim() ? { remark: String(input.remark).trim().slice(0, 200) } : {}),
+      first_order_today: false,
+      // No mobnum. sxp_register rejects every number we send (msgid 579); the top-up
+      // endpoint is the same family and there is no reason to find out the hard way.
+      ...(email ? { email } : {}),
+    },
+  };
+}
+
+/**
+ * @param limits {minAmount,maxAmount,multiple} from the scheme's own systematic[] SIP row,
+ *               which is where BSE publishes them. Omitted fields simply are not checked —
+ *               inventing a floor is what ticket 3 was about.
+ */
+function validateTopup(input = {}, limits = {}) {
+  const amount = Number(input.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return "Enter a top-up amount";
+  const { minAmount, maxAmount, multiple } = limits;
+  if (minAmount != null && amount < minAmount) return `Minimum top-up for this fund is ₹${minAmount}`;
+  if (maxAmount != null && amount > maxAmount) return `Maximum top-up for this fund is ₹${maxAmount}`;
+  if (multiple != null && multiple > 0 && amount % multiple !== 0) {
+    return `Top-up must be in multiples of ₹${multiple}`;
+  }
+  const freq = String(input.freq || "y");
+  // BSE's top-up frequencies are yearly and half-yearly on top of the SIP's own cadence.
+  if (!["y", "h", "m", "q"].includes(freq)) return "Choose a valid top-up frequency";
+  if (input.start_date && !isoDay(input.start_date)) return "Choose a valid top-up start date";
+  if (input.end_date && !isoDay(input.end_date)) return "Choose a valid top-up end date";
+  return null;
+}
+
+/**
+ * Ticket 21 — Modification.
+ *
+ * BSE has no sxp_update: a SIP's amount, date and frequency cannot be edited in place. The
+ * only faithful implementation is register-the-new-one, then cancel-the-old-one — in that
+ * order. Cancel-first would mean a failed registration leaves the investor with no SIP at
+ * all, while this way a failed cancel leaves them with two, which is visible on the SIPs
+ * page and reversible. "Existing SIP data must not be corrupted" decides the order.
+ *
+ * Returns the intent for the replacement registration: the old SIP's values with the
+ * investor's changes on top, so an unspecified field carries over rather than resetting.
+ */
+function mergeSipChanges(existing = {}, changes = {}) {
+  const pick = (a, b) => (a === undefined || a === null || a === "" ? b : a);
+  const freq = String(pick(changes.freq, existing.freq || "m")).toLowerCase();
+  const start = isoDay(changes.start_date) || null;
+  return {
+    scheme: String(pick(changes.scheme, existing.src_scheme || existing.scheme || "")).trim(),
+    amount: Number(pick(changes.amount, existing.amount)),
+    freq,
+    start_date: start,
+    // txn_date follows start_date; BSE rejects the pair when they disagree (msgid 3809).
+    txn_date: start ? Number(start.slice(8, 10)) : Number(pick(changes.txn_date, existing.txn_date)),
+    end_date: isoDay(changes.end_date) || isoDay(existing.end_date) || null,
+    ninstallments: Number(pick(changes.ninstallments, existing.ninstallments)) || null,
+  };
+}
+
+module.exports = {
+  buildXspRegisterPayload,
+  validateSip,
+  installmentsBetween,
+  FREQ,
+  xspRegNo,
+  buildCancelXspPayload,
+  buildPauseXspPayload,
+  buildResumeXspPayload,
+  buildTopupXspPayload,
+  validateTopup,
+  mergeSipChanges,
+  CANCEL_BY_INVESTOR,
+};

@@ -27,6 +27,8 @@ router.post("/getAllXsp", ...auth, StarMFController.getAllXsp);
 router.post("/topupXsp", ...auth, StarMFController.topupXsp);
 router.post("/resumeXsp", ...auth, StarMFController.resumeXsp);
 router.post("/getXspTrxnHistory", ...auth, StarMFController.getXspTrxnHistory);
+// BSE has no sxp_update — modify is register-then-cancel, in that order, server-side.
+router.post("/modifyXsp", ...auth, StarMFController.modifyXsp);
 
 // Orders
 router.post("/purchaseNewOrder", ...auth, StarMFController.purchaseNewOrder);

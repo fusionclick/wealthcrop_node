@@ -12,11 +12,20 @@ const { getHidden, isHidden } = require("../mf/hidden");
 const { getAmfiNavs } = require("../mf/amfiNav");
 const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE } = require("../mf/order");
 const { kycFromUcc, uccPan, investorPan } = require("../mf/kyc");
-const { buildXspRegisterPayload, validateSip } = require("../mf/xsp");
+const {
+  buildXspRegisterPayload,
+  validateSip,
+  xspRegNo,
+  buildCancelXspPayload,
+  buildPauseXspPayload,
+  buildResumeXspPayload,
+  buildTopupXspPayload,
+  validateTopup,
+  mergeSipChanges,
+} = require("../mf/xsp");
 const { mapBseErrors } = require("../mf/bseFieldErrors");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
-const xspRequestData = require("../requestData/xspRequestData");
 const nftRequestData = require("../requestData/nftRequestData");
 const schemeRequestData = require("../requestData/schemeRequestData");
 const paymentRequestData = require("../requestData/paymentRequestData");
@@ -122,7 +131,14 @@ const isActiveSip = (item) => {
 // BSE's SIP-list filters do not accept UCC/member. Search narrows the gateway
 // result, and this final server-side check prevents another investor's row from
 // ever reaching the browser.
-const scopeXspResponse = (response, ucc) => {
+/**
+ * @param activeOnly  the SIPs *page* wants only live SIPs, but an ownership check wants
+ *   every row this UCC owns — otherwise cancelling an already-cancelled SIP answers "no
+ *   such SIP on this account", which is both untrue and unhelpful. Scoping by UCC is the
+ *   security half and is never optional; the SIP-vs-STP / live-vs-dead filter is the
+ *   cosmetic half and is what this turns off.
+ */
+const scopeXspResponse = (response, ucc, { activeOnly = true } = {}) => {
   const data = response?.data;
   if (!data || typeof data !== "object") return response;
   const key = Array.isArray(data.lists) ? "lists" : Array.isArray(data.items) ? "items" : null;
@@ -131,7 +147,7 @@ const scopeXspResponse = (response, ucc) => {
   const rows = data[key].filter(
     (item) =>
       [item?.ucc, item?.ucc_code, item?.client_code, item?.investor_ucc, item?.investor?.ucc, item?.investor?.client_code]
-        .some((value) => cell(value) === expected) && isActiveSip(item)
+        .some((value) => cell(value) === expected) && (!activeOnly || isActiveSip(item))
   );
   // total_count is BSE's pre-filter number; leaving it would overstate what we returned.
   return { ...response, data: { ...data, [key]: rows, count: rows.length, total_count: rows.length } };
@@ -903,37 +919,222 @@ class StarMFController {
     );
     return this.handleTrxnRequest("xspRegister", reqObj, res);
   };
-  getXsp = async (req, res) => {
-    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.getXspData;
-    return this.handleTrxnRequest("getXsp", reqObj, res);
-  };
-  pauseXsp = async (req, res) => {
-    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.pauseXspData;
-    return this.handleTrxnRequest("pauseXsp", reqObj, res);
-  };
-  cancelXsp = async (req, res) => {
-    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.cancelXspData;
-    return this.handleTrxnRequest("cancelXsp", reqObj, res);
-  };
   getAllXsp = async (req, res) => {
     const ucc = req.ucc || investorUcc(req.investor);
     const reqObj = buildXspListPayload(req.body?.data, ucc);
     return this.handleTrxnRequest("getAllXsp", reqObj, res, (response) => scopeXspResponse(response, ucc));
   };
-  topupXsp = async (req, res) => {
-    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.topupXspData;
-    return this.handleTrxnRequest("topupXsp", reqObj, res);
-  };
 
-  resumeXsp = async (req, res) => {
-    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.resumeXsp;
-    return this.handleTrxnRequest("resumeXsp", reqObj, res);
-  };
+  /**
+   * Run a BSE trxn call and get its body back instead of writing it to a response.
+   *
+   * Same shim orderHistory uses: handleTrxnRequest only knows how to answer an Express
+   * response, and these flows need to read a result and decide what to do next.
+   */
+  callTrxn(serviceMethod, reqObj) {
+    return new Promise((resolve) => {
+      this.handleTrxnRequest(serviceMethod, reqObj, {
+        json: (data) => resolve(data),
+        status: (code) => ({ json: (data) => resolve({ ...data, _status: code }) }),
+      });
+    });
+  }
 
-  getXspTrxnHistory = async (req, res) => {
-    let reqObj = req.body && Object.keys(req.body).length ? req.body : xspRequestData.getXspTrxnHistory;
-    return this.handleTrxnRequest("getXspTrxnHistory", reqObj, res);
-  };
+  /**
+   * The SIP this request names, IF it belongs to the caller. Otherwise null.
+   *
+   * Every manage-a-SIP endpoint below goes through here. They all used to forward req.body
+   * to BSE untouched — so a signed-in investor could cancel, pause, resume or top up
+   * anybody's SIP just by naming its reg_no, and with no body at all they would operate on
+   * a hardcoded demo registration. Tickets 19/20/21 each ask for backend eligibility
+   * validation; this is that check, written once where all five callers already route.
+   *
+   * The list call is scoped by scopeXspResponse, so a row reaching this point is the
+   * caller's by construction — there is no second place to get it wrong.
+   */
+  async loadOwnedSip(req, regNo) {
+    const want = String(regNo || "").trim();
+    if (!want) return null;
+    const ucc = req.ucc || investorUcc(req.investor);
+    if (!ucc) return null;
+    const response = await this.callTrxn("getAllXsp", buildXspListPayload({ length: 100 }, ucc));
+    if (response?._status) return null;
+    // activeOnly:false — a cancelled or expired SIP is still this investor's, and the
+    // handlers below give a better answer about it than a blanket "no such SIP".
+    const scoped = scopeXspResponse(response, ucc, { activeOnly: false });
+    const rows = scoped?.data?.lists || scoped?.data?.items || [];
+    return rows.find((row) => xspRegNo(row).toUpperCase() === want.toUpperCase()) || null;
+  }
+
+  /** reg_no from wherever the caller put it, without letting them name a UCC. */
+  static regNoOf(req) {
+    const b = req.body?.data || req.body || {};
+    return String(b.reg_no ?? b.reg_num ?? b.regNo ?? "").trim();
+  }
+
+  /**
+   * Shared front half of cancel / pause / resume / top-up / history: find the caller's SIP
+   * or refuse. `404` rather than `403` on a SIP that is not theirs — confirming that some
+   * other investor's reg_no exists is itself a leak.
+   */
+  async withOwnedSip(req, res, run) {
+    const regNo = StarMFController.regNoOf(req);
+    if (!regNo) {
+      return res.status(400).json({ status: "error", message: "Which SIP? A registration number is required." });
+    }
+    const sip = await this.loadOwnedSip(req, regNo);
+    if (!sip) {
+      return res.status(404).json({ status: "error", message: "No such SIP on this account." });
+    }
+    return run(sip, regNo, req.body?.data || req.body || {});
+  }
+
+  getXsp = async (req, res) =>
+    this.withOwnedSip(req, res, (sip, regNo) =>
+      this.handleTrxnRequest("getXsp", { data: { reg_no: regNo, sxp_type: "SIP" } }, res)
+    );
+
+  getXspTrxnHistory = async (req, res) =>
+    this.withOwnedSip(req, res, (sip, regNo, input) =>
+      this.handleTrxnRequest(
+        "getXspTrxnHistory",
+        {
+          data: {
+            reg_no: regNo,
+            fields: ["ALL"],
+            filter_param: {
+              ...(Number(input.no_of_txn) > 0 ? { no_of_txn: Number(input.no_of_txn) } : {}),
+              ...(input.from_date ? { from_date: String(input.from_date) } : {}),
+              ...(input.to_date ? { to_date: String(input.to_date) } : {}),
+            },
+          },
+        },
+        res
+      )
+    );
+
+  /** Ticket 20 — cancel an active SIP. */
+  cancelXsp = async (req, res) =>
+    this.withOwnedSip(req, res, (sip, regNo, input) => {
+      // Eligibility is BSE's word on the registration, not the browser's. A SIP already
+      // cancelled or expired must not be sent again — BSE answers that with a code the
+      // investor cannot act on.
+      const status = String(sip.status || sip.sxp_status || "").toLowerCase();
+      if (/cancel|close|expire|stop/.test(status)) {
+        return res.status(409).json({ status: "error", message: "This SIP is already cancelled." });
+      }
+      return this.handleTrxnRequest("cancelXsp", buildCancelXspPayload(regNo, { reason: input.reason }), res);
+    });
+
+  pauseXsp = async (req, res) =>
+    this.withOwnedSip(req, res, (sip, regNo, input) =>
+      this.handleTrxnRequest(
+        "pauseXsp",
+        buildPauseXspPayload(regNo, { installments: input.ninstallments, from: input.paused_from }),
+        res
+      )
+    );
+
+  resumeXsp = async (req, res) =>
+    this.withOwnedSip(req, res, (sip, regNo, input) =>
+      this.handleTrxnRequest("resumeXsp", buildResumeXspPayload(regNo, { reason: input.resume_reason }), res)
+    );
+
+  /** Ticket 19 — Top-Up, against the scheme's own published limits. */
+  topupXsp = async (req, res) =>
+    this.withOwnedSip(req, res, async (sip, regNo, input) => {
+      const limits = await this.sipLimitsFor(sip.src_scheme || sip.scheme || input.scheme);
+      const invalid = validateTopup(input, limits);
+      if (invalid) return res.status(400).json({ status: "error", message: invalid });
+      return this.handleTrxnRequest(
+        "topupXsp",
+        buildTopupXspPayload(regNo, input, { email: req.investor?.email || "" }),
+        res
+      );
+    });
+
+  /**
+   * Ticket 21 — modify amount / date / frequency.
+   *
+   * BSE has no sxp_update, so this registers the replacement FIRST and cancels the original
+   * only once that succeeded. The other order would mean a failed registration leaves the
+   * investor with no SIP at all; this way the worst case is two SIPs, which is visible on
+   * the SIPs page and reversible. "Existing SIP data must not be corrupted" picks the order.
+   */
+  modifyXsp = async (req, res) =>
+    this.withOwnedSip(req, res, async (sip, regNo, input) => {
+      const ucc = req.ucc || investorUcc(req.investor);
+      const status = String(sip.status || sip.sxp_status || "").toLowerCase();
+      if (/cancel|close|expire|stop/.test(status)) {
+        return res.status(409).json({ status: "error", message: "This SIP is no longer active, so it cannot be modified." });
+      }
+
+      const intent = mergeSipChanges(sip, input);
+      const limits = await this.sipLimitsFor(intent.scheme);
+      const invalid = validateSip(intent, limits.minAmount != null ? { minSip: limits.minAmount } : {});
+      if (invalid) return res.status(400).json({ status: "error", message: invalid });
+
+      const kyc = req.investor?.kyc || {};
+      const registered = await this.callTrxn(
+        "xspRegister",
+        buildXspRegisterPayload(intent, {
+          ucc,
+          memberCode: this.memberCode,
+          email: req.investor?.email || "",
+          dpId: kyc.dp_id,
+          clientId: kyc.client_id,
+        })
+      );
+      if (registered?._status) {
+        // Nothing has changed yet — the original SIP is untouched and still running. BSE's
+        // own reason is kept, but the reassurance is appended rather than replaced by it:
+        // "BSE said no" on its own leaves the investor wondering if they still have a SIP.
+        const why = String(registered.message || "").trim();
+        return res.status(registered._status).json({
+          status: "error",
+          message: `${why ? `${why}. ` : ""}Your existing SIP is unchanged.`,
+        });
+      }
+
+      const cancelled = await this.callTrxn("cancelXsp", buildCancelXspPayload(regNo, { reason: "Modified by investor" }));
+      if (cancelled?._status) {
+        // The new SIP is live and the old one is not cancelled. Say so plainly rather than
+        // reporting success — the investor would otherwise be debited twice without warning.
+        return res.status(207).json({
+          status: "partial",
+          message:
+            "Your new SIP is registered, but the original could not be cancelled. Cancel it from Manage SIPs so you are not debited twice.",
+          data: { registered: registered?.data ?? null, old_reg_no: regNo },
+        });
+      }
+      return res.json({
+        status: "success",
+        message: "SIP updated.",
+        data: { registered: registered?.data ?? null, cancelled_reg_no: regNo },
+      });
+    });
+
+  /**
+   * The scheme's own SIP limits, from the same BSE master the fund page reads. Returns {}
+   * when the scheme cannot be resolved — an unknown limit is not checked, rather than
+   * replaced with a floor nobody published.
+   */
+  async sipLimitsFor(schemeCode) {
+    const code = String(schemeCode || "").trim();
+    if (!code) return {};
+    try {
+      // The index carries minSip (mapScheme reads it out of systematic[]) but deliberately
+      // not the max or the multiple — the full frequency rulebook is 40MB+ across 11k
+      // schemes, so it is only built on demand by /scheme-details. An unchecked max is the
+      // right trade here: BSE still enforces it, the investor just hears about it later.
+      const { list } = await getCatalogue(this, { scheme_code: code, length: 1 });
+      const row = (list || [])[0];
+      return row?.minSip != null ? { minAmount: Number(row.minSip) } : {};
+    } catch (e) {
+      console.warn("[xsp] scheme limits unavailable:", e.message);
+      return {};
+    }
+  }
 
   // Order Methods
   purchaseNewOrder = async (req, res) => {
