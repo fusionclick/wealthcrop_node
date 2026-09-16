@@ -6,7 +6,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 
-const { categoryBenchmark, resolveBenchmark, INDEX_MAP } = require("../src/mf/benchmark");
+const { categoryBenchmark, benchmarkFor, resolveBenchmark, INDEX_MAP } = require("../src/mf/benchmark");
 
 test("equity categories map to the index their factsheet uses", () => {
   assert.strictEqual(categoryBenchmark("Equity", "Equity • Large Cap"), "Nifty 100");
@@ -54,4 +54,35 @@ test("every index the category table names is one the price source can actually 
     assert.ok(hit, `${name} must resolve to an index symbol`);
     assert.ok(INDEX_MAP.some(([, sym]) => sym === hit.symbol), `${name} -> ${hit.symbol} must be in INDEX_MAP`);
   }
+});
+
+// ── The BSE switchover ─────────────────────────────────────────────────────────────────
+// BSE publishes `scheme_benchmark` and mapScheme already reads it into `benchmark`. It is
+// empty on the host this platform currently reaches, which is the only reason the category
+// fallback exists. These pin the precedence so the day a host that populates it is
+// connected, every scheme upgrades to its AMC's own benchmark with no code change.
+
+test("a scheme's OWN benchmark beats the category fallback", () => {
+  const pick = benchmarkFor({
+    benchmark: "NIFTY 50 TRI",           // what BSE's scheme_benchmark would carry
+    category: "Equity",
+    subType: "Equity • Large Cap",        // category alone would have said Nifty 100
+  });
+
+  assert.strictEqual(pick.name, "NIFTY 50 TRI");
+  assert.strictEqual(pick.source, "scheme");
+});
+
+test("a blank or whitespace benchmark from BSE falls through to the category", () => {
+  for (const blank of ["", "   ", null, undefined]) {
+    const pick = benchmarkFor({ benchmark: blank, category: "Equity", subType: "Equity • Large Cap" });
+    assert.strictEqual(pick.name, "Nifty 100");
+    assert.strictEqual(pick.source, "category");
+  }
+});
+
+test("no benchmark and no usable category means no benchmark at all", () => {
+  const pick = benchmarkFor({ benchmark: "", category: "Debt", subType: "Debt • Liquid" });
+  assert.strictEqual(pick.name, null);
+  assert.strictEqual(pick.source, null);
 });

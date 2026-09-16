@@ -70,6 +70,24 @@ const CATEGORY_BENCHMARKS = [
   [/flexi\s*cap|multi\s*cap|focus|value|contra|elss|tax\s*saver|dividend\s*yield|equity/i, "Nifty 500"],
 ];
 
+/**
+ * Which benchmark a scheme should be measured against, and where it came from.
+ *
+ * The scheme's OWN benchmark always wins. BSE publishes it as `scheme_benchmark` — a real
+ * column, currently empty on the host this platform reaches, which is the only reason the
+ * category fallback exists. The day a host that populates it is connected, every scheme
+ * silently upgrades from the category index to the one its AMC actually named, with no code
+ * change; this function is where that precedence lives so it can be tested rather than
+ * assumed.
+ */
+function benchmarkFor(scheme = {}) {
+  const own = String(scheme.benchmark || "").trim();
+  if (own) return { name: own, source: "scheme" };
+
+  const inferred = categoryBenchmark(scheme.category, scheme.subType, scheme.name);
+  return inferred ? { name: inferred, source: "category" } : { name: null, source: null };
+}
+
 /** Benchmark name inferred from a scheme's category, or null when there is no usable index. */
 function categoryBenchmark(...hints) {
   const text = hints.filter(Boolean).join(" ");
@@ -131,4 +149,4 @@ function resetBenchmarkCache(seed = null) {
   if (seed) for (const [k, v] of Object.entries(seed)) cache.set(k, { data: v, exp: Date.now() + TTL_MS });
 }
 
-module.exports = { resolveBenchmark, benchmarkSeries, categoryBenchmark, resetBenchmarkCache, INDEX_MAP, CATEGORY_BENCHMARKS };
+module.exports = { resolveBenchmark, benchmarkSeries, categoryBenchmark, benchmarkFor, resetBenchmarkCache, INDEX_MAP, CATEGORY_BENCHMARKS };

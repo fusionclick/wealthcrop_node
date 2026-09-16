@@ -4,7 +4,7 @@ const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
 const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache, schemeTransactions, returnsBoth, rollingReturns, alphaBeta } = require("../mf/scheme");
 const { getEnrichment } = require("../mf/kuvera");
-const { benchmarkSeries, categoryBenchmark } = require("../mf/benchmark");
+const { benchmarkSeries, benchmarkFor } = require("../mf/benchmark");
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
 const { getCatalogue, schemeCategories, AMFI_FALLBACK } = require("../mf/catalogue");
@@ -1868,9 +1868,8 @@ class StarMFController {
       // Unrecognised benchmark or an unreachable index still means no tiles, never invented ones.
       let risk = null;
       try {
-        const own = mapped.benchmark;
-        const fallback = own ? null : categoryBenchmark(mapped.category, mapped.subType, mapped.name);
-        const bench = await benchmarkSeries(own || fallback);
+        const pick = benchmarkFor(mapped);
+        const bench = await benchmarkSeries(pick.name);
         const ab = bench ? alphaBeta(series, bench.series) : null;
         if (ab) {
           risk = {
@@ -1878,7 +1877,7 @@ class StarMFController {
             benchmark: bench.label,
             benchmarkRaw: bench.raw,
             benchmarkIsPriceIndex: bench.isPriceIndex,
-            benchmarkSource: own ? "scheme" : "category",
+            benchmarkSource: pick.source,
           };
         }
       } catch (e) {
