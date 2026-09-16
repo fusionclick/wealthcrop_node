@@ -9,10 +9,20 @@ const UCC = "USRWC003";
 const TOKEN = "Bearer test-token-0123456789abcdef";
 
 // Stub Laravel /investor-data before the app reads config.
-let investorResponse = {
+// One fixture, so a test that swaps it out and restores it cannot quietly drop a field.
+const okInvestor = (over = {}) => ({
   status: true,
-  data: { kyc: { ucc_code: UCC, kyc_status: "verified" }, email: "a@b.com", phone: "9999999999" },
-};
+  data: {
+    kyc: { ucc_code: UCC, kyc_status: "verified" },
+    email: "a@b.com",
+    phone: "9999999999",
+    // Ticket 24: a purchase is now refused outright without a risk profile, so the
+    // happy-path fixture carries one. The gate itself is exercised further down.
+    riskProfile: { profile: "Aggressive", score: 82 },
+    ...over,
+  },
+});
+let investorResponse = okInvestor();
 let investorStatus = 200;
 let investorUserAgent = "";
 const authServer = http.createServer((req, res) => {
@@ -125,17 +135,26 @@ async function post(path, body, token = TOKEN) {
   return { status: r.status, body: await r.json() };
 }
 
-const buy = (over = {}) => ({
-  data: { orders: [{ type: "p", scheme: "007G", amount: 5000, cur: "INR", mem_ord_ref_id: "REF1", ...over }] },
+// Ticket 22: the acknowledgement rides with the order, per transaction.
+const ACKS = ["market_risk", "past_performance"];
+const buy = (over = {}, dataOver = {}) => ({
+  data: {
+    orders: [{ type: "p", scheme: "007G", amount: 5000, cur: "INR", mem_ord_ref_id: "REF1", ...over }],
+    acknowledged: ACKS,
+    ...dataOver,
+  },
 });
 const sell = (over = {}) => ({
   data: { orders: [{ type: "r", scheme: "007G", amount: 2000, folio: "F123", mem_ord_ref_id: "REF2", ...over }] },
 });
-const swap = (over = {}) => ({
+// A switch buys into dest_scheme, so it takes the same gates a purchase does.
+const swap = (over = {}, dataOver = {}) => ({
   data: {
     orders: [
       { type: "sw", scheme: "007G", dest_scheme: "008G", folio: "F123", all_units: true, mem_ord_ref_id: "REF3", ...over },
     ],
+    acknowledged: ACKS,
+    ...dataOver,
   },
 });
 
@@ -179,10 +198,7 @@ describe("order path end to end", () => {
     assert.equal(r.status, 401);
     assert.equal(sent, null);
     investorStatus = 200;
-    investorResponse = {
-      status: true,
-      data: { kyc: { ucc_code: UCC, kyc_status: "verified" }, email: "a@b.com", phone: "9999999999" },
-    };
+    investorResponse = okInvestor();
   });
 
   it("places a buy and sends the right payload to BSE", async () => {
@@ -362,6 +378,76 @@ describe("order path end to end", () => {
     assert.equal(r.body.message, "Scheme suspended");
     bseResponse = { status: "success", data: { items: [{ id: "ORD1" }] } };
   });
+
+  // Tickets 22 and 24. These rules lived only in the browser, so every one of these
+  // requests used to reach BSE — which is precisely "direct API requests must not be able
+  // to bypass risk restrictions".
+  it("ticket 22: a purchase with no disclaimer acknowledgement never reaches BSE", async () => {
+    sent = null;
+    const r = await post("/purchaseNewOrder", buy({}, { acknowledged: undefined }));
+    assert.equal(r.status, 403);
+    assert.equal(r.body.code, "disclaimer_not_acknowledged");
+    assert.deepEqual(r.body.required, ACKS);
+    assert.equal(sent, null, "BSE was called for an unacknowledged order");
+  });
+
+  it("ticket 22: a partial acknowledgement is refused and names what is missing", async () => {
+    sent = null;
+    const r = await post("/purchaseNewOrder", buy({}, { acknowledged: ["market_risk"] }));
+    assert.equal(r.status, 403);
+    assert.deepEqual(r.body.required, ["past_performance"]);
+    assert.equal(sent, null);
+  });
+
+  it("ticket 24: an investor with no risk profile cannot buy", async () => {
+    investorResponse = okInvestor({ riskProfile: null });
+    sent = null;
+    const r = await post("/purchaseNewOrder", buy());
+    assert.equal(r.status, 403);
+    assert.equal(r.body.code, "risk_profile_missing");
+    assert.equal(sent, null);
+    investorResponse = okInvestor();
+  });
+
+  it("ticket 24: a conservative investor is blocked from the fixture's equity fund", async () => {
+    investorResponse = okInvestor({ riskProfile: { profile: "Conservative" } });
+    sent = null;
+    const r = await post("/purchaseNewOrder", buy());
+    assert.equal(r.status, 403);
+    assert.match(r.body.code, /risk_(level|category)_unsuitable/);
+    assert.equal(sent, null);
+    investorResponse = okInvestor();
+  });
+
+  it("ticket 24: a switch is gated on the fund it buys INTO, not the one it sells", async () => {
+    // Otherwise type:"sw" is the way around the whole gate: sell a debt fund, land in a
+    // small cap, never asked a question.
+    investorResponse = okInvestor({ riskProfile: null });
+    sent = null;
+    const r = await post("/purchaseNewOrder", swap());
+    assert.equal(r.status, 403);
+    assert.equal(r.body.code, "risk_profile_missing");
+    assert.equal(sent, null, "BSE was called for an ungated switch");
+    investorResponse = okInvestor();
+  });
+
+  it("neither gate applies to a redemption", async () => {
+    // Gating a sell would trap an investor in a fund their profile no longer permits.
+    investorResponse = okInvestor({ riskProfile: null });
+    sent = null;
+    const r = await post("/purchaseNewOrder", sell());
+    assert.equal(r.status, 200);
+    assert.ok(sent, "a redemption must still reach BSE");
+    investorResponse = okInvestor();
+  });
+
+  it("ticket 22: the disclaimer text is served for the checkout screens", async () => {
+    const r = await fetch(`${base}/disclaimers`);
+    const body = await r.json();
+    assert.equal(r.status, 200);
+    assert.deepEqual(body.data.required, ACKS);
+    for (const key of ACKS) assert.ok(body.data.disclaimers[key], `no text for ${key}`);
+  });
 });
 
 // KYC verdict endpoint: Laravel calls this with the investor's bearer and writes
@@ -425,10 +511,7 @@ describe("kyc bse-status end to end", () => {
       ucc_status: "APPROVED",
       holder: [{ identifier: [{ identifier_type: "pan", identifier_number: "ZZZZZ9999Z" }] }],
     });
-    investorResponse = {
-      status: true,
-      data: { kyc: { ucc_code: UCC }, email: "a@b.com", profile: { pan_number: "ABCDE1234F" } },
-    };
+    investorResponse = okInvestor({ kyc: { ucc_code: UCC }, profile: { pan_number: "ABCDE1234F" } });
     const r = await post("/kyc/bse-status", { ucc: UCC });
     assert.equal(r.status, 403);
     assert.match(r.body.message, /different PAN/i);
@@ -442,9 +525,6 @@ describe("kyc bse-status end to end", () => {
     const r = await post("/kyc/bse-status", { ucc: UCC });
     assert.equal(r.status, 200);
     assert.equal(r.body.data.kyc_status, "verified");
-    investorResponse = {
-      status: true,
-      data: { kyc: { ucc_code: UCC, kyc_status: "verified" }, email: "a@b.com", phone: "9999999999" },
-    };
+    investorResponse = okInvestor();
   });
 });

@@ -153,7 +153,13 @@ const fakeRes = () => {
   };
 };
 
-const reqFor = (data) => ({ ucc: "UCC-A", investor: { email: "a@example.com", kyc: {} }, body: { data } });
+// A modification registers a fresh SIP, so it goes through the same ticket-22 disclaimer
+// and ticket-24 suitability gates a purchase does. Every request here carries both.
+const reqFor = (data) => ({
+  ucc: "UCC-A",
+  investor: { email: "a@example.com", kyc: {}, riskProfile: { profile: "Aggressive" } },
+  body: { data: { acknowledged: ["market_risk", "past_performance"], ...data } },
+});
 
 describe("every manage-a-SIP endpoint refuses a SIP that is not the caller's", () => {
   let sent;

@@ -23,6 +23,7 @@ const {
   validateTopup,
   mergeSipChanges,
 } = require("../mf/xsp");
+const { checkSuitability, checkDisclaimers, DISCLAIMERS, REQUIRED_ACKS } = require("../mf/suitability");
 const { mapBseErrors } = require("../mf/bseFieldErrors");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
@@ -893,6 +894,46 @@ class StarMFController {
     return this.handleMandateRequest("updateMandate", reqObj, res);
   };
 
+  /**
+   * The two pre-order gates every purchase path shares (tickets 22, 24).
+   *
+   * Returns the refusal body, or null to let the order through. One function because
+   * /purchaseNewOrder, /xspRegister and /modifyXsp are three doors into the same room —
+   * gating one of them is the same as gating none.
+   */
+  async gateOrder(req, rawScheme) {
+    const disclaimed = checkDisclaimers(req.body?.data || req.body || {});
+    if (!disclaimed.ok) {
+      return { status: "error", code: disclaimed.code, message: disclaimed.message, required: disclaimed.required };
+    }
+    // lookupScheme hands back BSE's raw master row, which carries a category but no SEBI
+    // riskometer level — BSE's master has no such column. Map it, then ask the enrichment
+    // source for the level, exactly as the fund page does. Fail-open there means the
+    // category rules carry the check on their own, which is the documented behaviour.
+    let scheme = {};
+    if (rawScheme) {
+      const mapped = mapScheme(rawScheme);
+      let risk = mapped.risk || null;
+      if (!risk) {
+        try {
+          risk = (await getEnrichment(mapped.scheme_bse_code))?.risk || null;
+        } catch (e) {
+          console.warn("[gate] risk level unavailable:", e.message);
+        }
+      }
+      scheme = { ...mapped, risk };
+    }
+    const suitable = checkSuitability(req.investor, scheme);
+    if (!suitable.ok) {
+      return { status: "error", code: suitable.code, message: suitable.message };
+    }
+    return null;
+  }
+
+  /** The disclaimer text the checkout screens render, and which of them must be ticked. */
+  disclaimers = async (_req, res) =>
+    res.json({ status: "success", data: { disclaimers: DISCLAIMERS, required: REQUIRED_ACKS } });
+
   // XSP Methods
   xspRegister = async (req, res) => {
     // Was: `req.body` forwarded to BSE untouched. That let the browser name its own UCC —
@@ -905,6 +946,10 @@ class StarMFController {
     const scheme = String(input.scheme || input.src_scheme || "").trim();
     const invalid = validateSip({ ...input, scheme });
     if (invalid) return res.status(400).json({ status: "error", message: invalid });
+
+    // A SIP is a purchase instruction repeated, so it gets the same gates a lumpsum does.
+    const gate = await this.gateOrder(req, await this.lookupScheme(scheme));
+    if (gate) return res.status(403).json(gate);
 
     const kyc = req.investor?.kyc || {};
     const reqObj = buildXspRegisterPayload(
@@ -1074,6 +1119,11 @@ class StarMFController {
       const invalid = validateSip(intent, limits.minAmount != null ? { minSip: limits.minAmount } : {});
       if (invalid) return res.status(400).json({ status: "error", message: invalid });
 
+      // A modification registers a fresh SIP, so it is a new purchase instruction and takes
+      // the same gates. Skipping it here would make /modifyXsp the way around them.
+      const gate = await this.gateOrder(req, await this.lookupScheme(intent.scheme));
+      if (gate) return res.status(403).json(gate);
+
       const kyc = req.investor?.kyc || {};
       const registered = await this.callTrxn(
         "xspRegister",
@@ -1162,6 +1212,17 @@ class StarMFController {
     const limits = checkSchemeLimits(parsed.order, scheme);
     if (!limits.ok) {
       return res.status(400).json({ status: "error", message: limits.error });
+    }
+    // Tickets 22 and 24, on anything that BUYS. A redemption is deliberately exempt:
+    // gating a sell would trap an investor in a fund their profile no longer permits.
+    //
+    // A switch counts. It buys into dest_scheme, so that is the scheme to judge — judging
+    // the source, which is being sold, would make type:"sw" the way around the whole gate.
+    const orderType = String(parsed.order.type || "").toLowerCase();
+    if (orderType === "p" || orderType === "sw") {
+      const target = orderType === "sw" ? await this.lookupScheme(parsed.order.dest_scheme) : scheme;
+      const gate = await this.gateOrder(req, target);
+      if (gate) return res.status(403).json(gate);
     }
     const mobile = normalizeMobile(parsed.order.mobnum) || investorMobile(req.investor);
     const dp = parsed.order.depository_acct?.dp_id ? parsed.order.depository_acct : await this.lookupDepository(ucc);

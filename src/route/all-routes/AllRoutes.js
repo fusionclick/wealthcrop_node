@@ -31,6 +31,9 @@ router.post("/getXspTrxnHistory", ...auth, StarMFController.getXspTrxnHistory);
 router.post("/modifyXsp", ...auth, StarMFController.modifyXsp);
 
 // Orders
+// The statutory text the checkout screens render, and which of them must be ticked. Public:
+// it is a regulatory notice, and gating it behind a login would only mean showing it later.
+router.get("/disclaimers", StarMFController.disclaimers);
 router.post("/purchaseNewOrder", ...auth, StarMFController.purchaseNewOrder);
 router.post("/updatePurchaseOrder", ...auth, StarMFController.updatePurchaseOrder);
 router.post("/getAllOrders", ...auth, StarMFController.getAllOrders);
