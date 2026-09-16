@@ -309,6 +309,8 @@ const SORTS = {
   returns_3y: (f) => f.returns?.["3Y"],
   returns_5y: (f) => f.returns?.["5Y"],
   age: (f) => f.ageYears,
+  // Ticket 11 — rank by fund size. Already ₹ crore; normalised in kuvera.js.
+  aum: (f) => f.aum,
   rating: (f) => f.fundRating,
   risk: (f) => f.riskRank,
   min_sip: (f) => f.minSip,
@@ -349,6 +351,9 @@ function query(
     txn = "",
     minAge = null,
     maxAge = null,
+    // Ticket 11 — fund size band, in ₹ crore.
+    minAum = null,
+    maxAum = null,
     minReturn = null,
     returnPeriod = "1Y",
     sort = "",
@@ -384,6 +389,10 @@ function query(
 
   if (minAge != null) rows = rows.filter((f) => f.ageYears != null && f.ageYears >= minAge);
   if (maxAge != null) rows = rows.filter((f) => f.ageYears != null && f.ageYears <= maxAge);
+  // Ticket 11 — a fund with no published size is excluded from an explicit size band rather
+  // than assumed to be zero, the same rule the age filter above already follows.
+  if (minAum != null) rows = rows.filter((f) => f.aum != null && f.aum >= minAum);
+  if (maxAum != null) rows = rows.filter((f) => f.aum != null && f.aum <= maxAum);
   if (minReturn != null) {
     const key = String(returnPeriod || "1Y").toUpperCase();
     rows = rows.filter((f) => f.returns?.[key] != null && f.returns[key] >= minReturn);

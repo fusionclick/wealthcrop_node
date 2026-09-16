@@ -735,6 +735,9 @@ function parseListQuery(body = {}) {
   const txn = String(body.txn || src.txn || "").trim().toLowerCase();
   const minAge = numOrNull(body.minAge ?? src.minAge);
   const maxAge = numOrNull(body.maxAge ?? src.maxAge);
+  // Ticket 11 — fund-size band, ₹ crore.
+  const minAum = numOrNull(body.minAum ?? src.minAum);
+  const maxAum = numOrNull(body.maxAum ?? src.maxAum);
   const minReturn = numOrNull(body.minReturn ?? src.minReturn);
   const returnPeriod = String(body.returnPeriod || src.returnPeriod || "1Y").trim().toUpperCase();
   const sort = String(body.sort || src.sort || "").trim().toLowerCase();
@@ -753,6 +756,8 @@ function parseListQuery(body = {}) {
     txn,
     minAge,
     maxAge,
+    minAum,
+    maxAum,
     minReturn,
     returnPeriod,
     sort,
@@ -813,6 +818,8 @@ function listCacheKey(q = {}) {
     q.txn,
     q.minAge,
     q.maxAge,
+    q.minAum,
+    q.maxAum,
     q.minReturn,
     q.returnPeriod,
     q.sort,

@@ -11,6 +11,7 @@
 // gets as far as pressing Invest. This one is the authority.
 
 const { normaliseRisk, RISK_LEVELS } = require("./kuvera");
+const { peekRiskPolicy } = require("./riskPolicy");
 
 const RISK_RANK = new Map(RISK_LEVELS.map((r, i) => [r, i + 1]));
 
@@ -64,7 +65,7 @@ const ALWAYS_SUITABLE = /debt|liquid|overnight|money\s*market|gilt/i;
  * the level is unknown the category overrides still apply, and if those say nothing either
  * then nothing here can show the fund to be unsuitable, so it goes through.
  */
-function checkSuitability(investor, scheme = {}) {
+function checkSuitability(investor, scheme = {}, policy = null) {
   const profile = investorProfileOf(investor);
   if (!profile) {
     return {
@@ -73,7 +74,9 @@ function checkSuitability(investor, scheme = {}) {
       message: "Complete your risk profile before investing. It takes a minute and is required before any order.",
     };
   }
-  const ceiling = RISK_POLICY[profile];
+  // Ticket 23 — the ceilings are admin-configurable (see riskPolicy.js). A caller that does
+  // not pass one gets whatever is cached, which is the built-in table until Laravel answers.
+  const ceiling = (policy || peekRiskPolicy())[profile] ?? RISK_POLICY[profile];
   const category = `${scheme.category || ""} ${scheme.subType || ""} ${scheme.scheme_category || ""}`;
 
   if (ALWAYS_SUITABLE.test(category)) return { ok: true };

@@ -27,6 +27,7 @@ const {
   mergeSipChanges,
 } = require("../mf/xsp");
 const { checkSuitability, checkDisclaimers, DISCLAIMERS, REQUIRED_ACKS } = require("../mf/suitability");
+const { getRiskPolicy } = require("../mf/riskPolicy");
 const { mapBseErrors } = require("../mf/bseFieldErrors");
 const orderRequestData = require("../requestData/orderRequestData");
 const uccRequestData = require("../requestData/uccRequestData");
@@ -932,7 +933,10 @@ class StarMFController {
       }
       scheme = { ...mapped, risk };
     }
-    const suitable = checkSuitability(req.investor, scheme);
+    // Ticket 23 — the ceilings come from the admin panel. Awaited here, at the one place
+    // every order path already funnels through, so a compliance change takes effect within
+    // the cache TTL and no caller has to remember to load it.
+    const suitable = checkSuitability(req.investor, scheme, await getRiskPolicy());
     if (!suitable.ok) {
       return { status: "error", code: suitable.code, message: suitable.message };
     }
@@ -1888,6 +1892,10 @@ class StarMFController {
             objective: extra.objective || null,
             factsheetUrl: extra.factsheetUrl || null,
             fundRating: extra.fundRating ?? null,
+            // Ticket 3 — fund size, in ₹ crore. The unit is normalised inside kuvera.js so
+            // nothing downstream has to know what the feed sends.
+            aum: extra.aum ?? null,
+            aumUnit: extra.aumUnit ?? null,
             expense: mapped.expense || extra.expense || null,
             // "Plan inception": for a scheme older than 2013 the direct plan genuinely
             // starts 2013-01-01, so this is the plan's birthday, not the fund's.

@@ -94,7 +94,7 @@ describe("catalogue", () => {
   it("paginates and parses list query", () => {
     // Ranking/filtering defaults ride along on every parse — they must all be present so
     // listCacheKey can key on them.
-    const noFilters = { risk: "", txn: "", minAge: null, maxAge: null, minReturn: null, returnPeriod: "1Y", sort: "", order: "desc" };
+    const noFilters = { risk: "", txn: "", minAge: null, maxAge: null, minAum: null, maxAum: null, minReturn: null, returnPeriod: "1Y", sort: "", order: "desc" };
     const q = parseListQuery({ start: 20, length: 10, search: "gold" });
     assert.deepEqual(q, { start: 20, length: 10, search: "gold", category: "", isin: "", scheme_code: "", plan: "", sip: "", mode: "", ...noFilters });
     assert.deepEqual(
@@ -106,6 +106,14 @@ describe("catalogue", () => {
     assert.equal(ranked.txn, "sip,swp");
     assert.equal(ranked.minAge, 3);
     assert.equal(ranked.minReturn, 12);
+    // Ticket 11 — fund-size band, ₹ crore.
+    const sized = parseListQuery({ minAum: "500", maxAum: "25000" });
+    assert.equal(sized.minAum, 500);
+    assert.equal(sized.maxAum, 25000);
+    assert.notEqual(
+      listCacheKey(parseListQuery({ minAum: 500 })),
+      listCacheKey(parseListQuery({ minAum: 5000 }))
+    );
     assert.equal(ranked.returnPeriod, "3Y");
     assert.equal(ranked.sort, "returns_3y");
     assert.equal(ranked.order, "asc");

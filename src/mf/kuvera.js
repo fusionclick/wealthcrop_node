@@ -16,14 +16,22 @@
  *     monthly at most, so a 24h TTL and a 6h negative TTL keep the traffic to a trickle.
  *   - bounded concurrency. A 100-row page must not open 100 sockets to a third party.
  *
- * NOT exposed: `aum`. The field exists and is scheme-level (Direct and Regular plans of the
- * same scheme return the identical figure), but its UNIT could not be established from any
- * source — read as lakh it puts Parag Parikh Flexi Cap at ~14.8k Cr and SBI Liquid at
- * ~9.2k Cr, both off by roughly the same 7-10x against their known sizes, and read as crore
- * it puts one scheme above the whole industry. A fund-size figure that is wrong by 100x on
- * an investment platform is worse than an absent one, so it stays behind AUM_UNIT below.
- * Set that to the verified unit (against AMFI's quarterly scheme-wise AAUM, or a licensed
- * feed) and the tile lights up with no other change.
+ * `aum` — UNIT NOW VERIFIED (ticket 3). It is scheme-level: the Direct and Regular plans of
+ * one scheme return the identical figure.
+ *
+ * The unit is **₹10 lakh**, i.e. `raw / 10` is the fund size in ₹ crore. That was settled by
+ * probing two funds of very different size and checking each against two independent
+ * published figures, and it lands exactly, not approximately:
+ *
+ *   PP001ZG-GR  raw 1,484,290  ->  148,429.0 Cr   published ₹1,48,429 Cr  (ETMoney; and the
+ *                                                  mutualfundsindia factsheet, 148,429.00)
+ *   SB072SF-DR  raw   921,916  ->   92,191.6 Cr   published ₹92,191.69 Cr (Paytm Money)
+ *
+ * An earlier reading of this field as ₹1 lakh is what produced the "off by 7-10x" note that
+ * used to live here — it was off by exactly 10, which is the whole of the discrepancy.
+ *
+ * `MF_ENRICH_AUM_DIVISOR` stays overridable so a future feed change can be corrected without
+ * a deploy, but it now has a proven default rather than being null-and-hidden.
  */
 const axios = require("axios");
 
@@ -33,10 +41,24 @@ const TTL_MS = 24 * 60 * 60 * 1000;
 const MISS_TTL_MS = 6 * 60 * 60 * 1000;
 const CONCURRENCY = Number(process.env.MF_ENRICH_CONCURRENCY) || 6;
 const TIMEOUT_MS = Number(process.env.MF_ENRICH_TIMEOUT_MS) || 6000;
-// Unverified — see the note above. Null keeps every AUM value out of the API response.
-const AUM_UNIT = process.env.MF_ENRICH_AUM_UNIT || null;
+// Verified against published figures — see the note above. Divide the raw value by this to
+// get ₹ crore. Set to 0 to withhold AUM entirely again.
+const AUM_DIVISOR = process.env.MF_ENRICH_AUM_DIVISOR != null ? Number(process.env.MF_ENRICH_AUM_DIVISOR) : 10;
 
 const http = axios.create({ timeout: TIMEOUT_MS });
+
+/**
+ * Raw feed value -> fund size in ₹ crore, or null when it is unusable.
+ *
+ * A zero or negative AUM is not a fund size, it is a missing one, and showing "₹0 Cr" next
+ * to a fund people are about to buy would read as a real and alarming number.
+ */
+function aumCrore(raw) {
+  if (!(AUM_DIVISOR > 0)) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round((n / AUM_DIVISOR) * 100) / 100;
+}
 
 /**
  * SEBI's riskometer has exactly six levels. Anything that does not map to one of them is
@@ -109,8 +131,10 @@ function shape(row = {}) {
     // the two can differ in the second decimal because they are cut on different days.
     returns: { "1Y": pct(r.year_1), "3Y": pct(r.year_3), "5Y": pct(r.year_5), inception: pct(r.inception) },
     volatility: pct(row.volatility),
-    aum: AUM_UNIT ? Number(row.aum) || null : null,
-    aumUnit: AUM_UNIT,
+    // Always ₹ crore by the time it leaves this file, so no caller has to know the feed's
+    // unit — the mistake this field already made once.
+    aum: aumCrore(row.aum),
+    aumUnit: AUM_DIVISOR > 0 ? "crore" : null,
   };
 }
 
@@ -317,6 +341,7 @@ module.exports = {
   enrichmentStats,
   resetEnrichmentCache,
   normaliseRisk,
+  aumCrore,
   RISK_LEVELS,
   RISK_RANK,
 };
