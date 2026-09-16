@@ -41,6 +41,47 @@ const INDEX_MAP = [
   [/(s&p\s*)?bse\s*sensex|^sensex/i, "^BSESN", "S&P BSE Sensex"],
 ];
 
+/**
+ * Ticket 5 — Alpha and Beta when the scheme does not name its own benchmark.
+ *
+ * `scheme_benchmark` is a real BSE column, but it comes back empty for every scheme on the
+ * host this platform is pointed at, so Alpha and Beta never appeared at all. The fallback is
+ * the benchmark SEBI prescribes for the scheme's category — the same index the AMC's own
+ * factsheet measures against, not a guess.
+ *
+ * Two rules keep it honest:
+ *   - Only indices verified to return a full daily series are mapped. Nifty Midcap 150 and
+ *     Smallcap 250 — the exact Tier-1 benchmarks for those categories — are not published by
+ *     the price source, so mid cap falls back to Midcap 50 and SMALL CAP GETS NOTHING rather
+ *     than being measured against an index it does not track.
+ *   - The caller is told which index by name, and that it came from the category, so the page
+ *     says "vs Nifty 500" rather than an unqualified "Beta". A number under a label it does
+ *     not belong to is the thing this file exists to prevent.
+ *
+ * Debt, liquid, hybrid, gold and international get nothing: their benchmarks are debt or
+ * blended indices this source does not carry, and an equity index would be meaningless.
+ */
+const CATEGORY_BENCHMARKS = [
+  [/small\s*cap/i, null], // Tier-1 is Smallcap 250 — unavailable, so no number at all.
+  [/large\s*(?:&|and)\s*mid|large\s*mid/i, "Nifty 500"],
+  [/mid\s*cap/i, "Nifty Midcap 50"],
+  [/large\s*cap|bluechip|top\s*100/i, "Nifty 100"],
+  [/bank|financial\s*services/i, "Nifty Bank"],
+  [/flexi\s*cap|multi\s*cap|focus|value|contra|elss|tax\s*saver|dividend\s*yield|equity/i, "Nifty 500"],
+];
+
+/** Benchmark name inferred from a scheme's category, or null when there is no usable index. */
+function categoryBenchmark(...hints) {
+  const text = hints.filter(Boolean).join(" ");
+  if (!text.trim()) return null;
+  // Debt-ish and blended categories first — they must not fall through to the /equity/ arm.
+  if (/debt|liquid|overnight|money\s*market|gilt|bond|credit|duration|hybrid|balanced|arbitrage|gold|silver|international|global|fund\s*of\s*fund|\bfof\b/i.test(text)) {
+    return null;
+  }
+  const hit = CATEGORY_BENCHMARKS.find(([re]) => re.test(text));
+  return hit ? hit[1] : null;
+}
+
 function resolveBenchmark(name) {
   const s = String(name || "").trim();
   if (!s) return null;
@@ -90,4 +131,4 @@ function resetBenchmarkCache(seed = null) {
   if (seed) for (const [k, v] of Object.entries(seed)) cache.set(k, { data: v, exp: Date.now() + TTL_MS });
 }
 
-module.exports = { resolveBenchmark, benchmarkSeries, resetBenchmarkCache, INDEX_MAP };
+module.exports = { resolveBenchmark, benchmarkSeries, categoryBenchmark, resetBenchmarkCache, INDEX_MAP, CATEGORY_BENCHMARKS };

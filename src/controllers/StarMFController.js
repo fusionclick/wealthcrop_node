@@ -4,7 +4,7 @@ const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
 const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache, schemeTransactions, returnsBoth, rollingReturns, alphaBeta } = require("../mf/scheme");
 const { getEnrichment } = require("../mf/kuvera");
-const { benchmarkSeries } = require("../mf/benchmark");
+const { benchmarkSeries, categoryBenchmark } = require("../mf/benchmark");
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor } = require("../mf/navStore");
 const { getCatalogue, schemeCategories, AMFI_FALLBACK } = require("../mf/catalogue");
@@ -1860,13 +1860,27 @@ class StarMFController {
       const periodReturns = returnsBoth(series);
       const rolling = rollingReturns(series);
 
-      // Alpha/Beta need the scheme's OWN benchmark, which is the one thing BSE does give us.
-      // Unrecognised benchmark or an unreachable index = no tiles, not invented tiles.
+      // Alpha/Beta need a benchmark. The scheme's own (`scheme_benchmark`) is preferred, but
+      // it is empty for every scheme on the host we are pointed at, which is why both tiles
+      // were blank. Falling back to the index SEBI prescribes for the category gives a real
+      // number for most equity schemes — and `benchmarkSource` tells the page which it was,
+      // so a category benchmark is never shown as if the AMC had named it.
+      // Unrecognised benchmark or an unreachable index still means no tiles, never invented ones.
       let risk = null;
       try {
-        const bench = await benchmarkSeries(mapped.benchmark);
+        const own = mapped.benchmark;
+        const fallback = own ? null : categoryBenchmark(mapped.category, mapped.subType, mapped.name);
+        const bench = await benchmarkSeries(own || fallback);
         const ab = bench ? alphaBeta(series, bench.series) : null;
-        if (ab) risk = { ...ab, benchmark: bench.label, benchmarkRaw: bench.raw, benchmarkIsPriceIndex: bench.isPriceIndex };
+        if (ab) {
+          risk = {
+            ...ab,
+            benchmark: bench.label,
+            benchmarkRaw: bench.raw,
+            benchmarkIsPriceIndex: bench.isPriceIndex,
+            benchmarkSource: own ? "scheme" : "category",
+          };
+        }
       } catch (e) {
         console.warn("[mf] alpha/beta unavailable:", e.message);
       }
@@ -1884,7 +1898,20 @@ class StarMFController {
             current_nav: currentNav,
             nav_date: navDate,
             returns,
-            advancedRatios: { ...ratios, ...(risk ? { alpha: risk.alpha, beta: risk.beta } : {}) },
+            advancedRatios: {
+              ...ratios,
+              // The index goes out with the numbers, never separately: Alpha and Beta only
+              // mean something next to what they were measured against.
+              ...(risk
+                ? {
+                    alpha: risk.alpha,
+                    beta: risk.beta,
+                    benchmark: risk.benchmark,
+                    benchmarkSource: risk.benchmarkSource,
+                    benchmarkIsPriceIndex: risk.benchmarkIsPriceIndex,
+                  }
+                : {}),
+            },
             holdings: profile.holdings,
             risk: mapped.risk || extra.risk || null,
             riskRank: extra.riskRank ?? null,
