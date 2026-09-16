@@ -260,6 +260,13 @@ function applyCached(row) {
   row.inceptionDate = extra.inceptionDate;
   row.fundRating = extra.fundRating;
   row.returns = extra.returns || row.returns;
+  // Ticket 11 — fund size has to be ON the index row, not just on the page rows that
+  // enrichRows() decorates later. Filtering and ranking run across all ~11k rows BEFORE the
+  // page is sliced (that is what makes `total` honest), so a field added only on the way out
+  // is invisible to `minAum`/`maxAum`/`sort=aum` — which is exactly how those silently
+  // matched nothing while the very same row showed an AUM in the response.
+  row.aum = extra.aum;
+  row.aumUnit = extra.aumUnit;
   row.enriched = true;
   return true;
 }

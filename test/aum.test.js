@@ -5,8 +5,10 @@
 // back without a test going red.
 const test = require("node:test");
 const assert = require("node:assert");
+const fs = require("fs");
+const path = require("path");
 
-const { aumCrore } = require("../src/mf/kuvera");
+const { aumCrore, applyCached } = require("../src/mf/kuvera");
 const { query } = require("../src/mf/catalogue");
 
 test("the feed's unit is ₹10 lakh, so raw/10 is ₹ crore", () => {
@@ -44,4 +46,23 @@ test("fund size filters and ranks, and an unsized fund is excluded from a band",
   assert.strictEqual(ranked.lists[0].name, "Big");
   // Unknown sorts last rather than winning a "largest fund" ranking.
   assert.strictEqual(ranked.lists.at(-1).name, "Unknown");
+});
+
+test("every field the filters read is copied onto the INDEX row", () => {
+  // The bug this pins: `aum` was attached on the way OUT (enrichRows) but not by
+  // applyCached, which decorates the ~11k rows query() filters over. Live, that gave a
+  // catalogue where every row showed an AUM and `minAum=1` still matched nothing.
+  //
+  // Hand-built rows cannot catch it — they already carry the field. So this asserts the
+  // contract at applyCached itself: anything query() filters or sorts on has to be set
+  // there, or it is invisible at filter time.
+  assert.strictEqual(applyCached({ scheme_bse_code: "__no_such_scheme__" }), false);
+
+  const src = fs.readFileSync(path.join(__dirname, "..", "src", "mf", "kuvera.js"), "utf8");
+  const start = src.indexOf("function applyCached");
+  const body = src.slice(start, src.indexOf("\n}", start));
+
+  for (const field of ["risk", "riskRank", "ageYears", "returns", "aum"]) {
+    assert.ok(body.includes(`row.${field} =`), `applyCached must set row.${field} — query() filters or sorts on it`);
+  }
 });
