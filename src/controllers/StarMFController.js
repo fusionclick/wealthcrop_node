@@ -13,6 +13,7 @@ const { getAmfiNavs } = require("../mf/amfiNav");
 const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE } = require("../mf/order");
 const { kycFromUcc, uccPan, investorPan } = require("../mf/kyc");
 const { pdfLines, parseCas, casHoldings } = require("../mf/cas");
+const { answer: qaAnswer } = require("../mf/qaFixtures");
 const {
   buildXspRegisterPayload,
   validateSip,
@@ -776,6 +777,11 @@ class StarMFController {
   }
 
   async handleTrxnRequest(serviceMethod, reqObj, res, transform) {
+    // Every BSE trxn call funnels through here, so one check covers order_list, sxp_list
+    // and the registration mutations rather than seven separate ones. Returns null unless
+    // MF_QA_UCC lists this exact client code, in which case nothing below changes.
+    const canned = qaAnswer(serviceMethod, reqObj);
+    if (canned) return res.json(transform ? transform(canned) : canned);
     return this.executeWithRetry("trxnService", serviceMethod, reqObj, res, transform);
   }
 
