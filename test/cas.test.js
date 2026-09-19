@@ -68,7 +68,7 @@ test("the statement parses into folios, schemes and transactions", async () => {
   assert.strictEqual(cas.folios[0].amc, "HDFC Mutual Fund");
 
   const liquid = cas.folios[0].schemes[0];
-  assert.strictEqual(liquid.scheme_name, "HDFC Liquid Fund - Growth Option");
+  assert.strictEqual(liquid.scheme_name, "HDFC Mid Cap Fund - Growth Option");
   assert.strictEqual(liquid.isin, "INF179K01XQ0");
   assert.strictEqual(liquid.rta, "CAMS");
   assert.strictEqual(liquid.close_units, 125.178);
@@ -93,7 +93,7 @@ test("holdings come back in the shape the external portfolio already stores", as
   assert.strictEqual(rows.length, 3);
   assert.ok(!rows.some((r) => r.scheme_name.includes("SBI")));
 
-  const sip = rows.find((r) => r.scheme_isin === "INF179K01XQ1");
+  const sip = rows.find((r) => r.scheme_isin === "INF179K01UT0");
   assert.strictEqual(sip.units, 6.9);
   assert.strictEqual(sip.invested_amount, 10000); // two ₹5,000 SIP installments
   assert.strictEqual(sip.purchased_at, "2024-04-05");

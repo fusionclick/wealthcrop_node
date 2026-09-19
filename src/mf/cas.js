@@ -172,6 +172,25 @@ async function pdfLines(buffer, password = "") {
  */
 function costBasis(transactions, openUnits) {
   if (openUnits > 0) return null;
+  return walkCost(transactions);
+}
+
+/**
+ * What the purchases printed in THIS statement come to, whether or not they are the whole
+ * story. Always a number, never null.
+ *
+ * Deliberately separate from `costBasis`. When a statement opens with units already held,
+ * this is a genuine fact — "₹20,000 of buying appears in this document" — but it is NOT the
+ * cost basis, and the two must never be swapped. Filling the invested field with it would
+ * report a 285% gain on a holding whose earlier purchases are simply not in the statement.
+ * The UI offers it as something the investor can accept, never as the answer.
+ */
+function visibleCost(transactions = []) {
+  return walkCost(transactions);
+}
+
+/** Cost carried at the average rate bought, so a redemption removes cost, not just units. */
+function walkCost(transactions = []) {
   let cost = 0;
   let units = 0;
   for (const t of transactions) {
@@ -203,6 +222,9 @@ function parseCas(lines = []) {
     if (!scheme) return;
     scheme.transactions.sort((a, b) => a.date.localeCompare(b.date));
     scheme.cost = costBasis(scheme.transactions, scheme.open_units || 0);
+    // Always computed, even when the cost basis is unknown — it is what the UI offers
+    // as a starting point instead of pre-filling the market value.
+    scheme.visible_cost = visibleCost(scheme.transactions);
     const firstBuy = scheme.transactions.find((t) => t.units > 0);
     scheme.first_buy = firstBuy ? firstBuy.date : null;
     scheme = null;
@@ -344,6 +366,10 @@ function casHoldings(parsed) {
         nav_date: s.nav_date,
         statement_value: s.value,
         invested_amount: s.cost,
+        // Only meaningful when invested_amount is null: the purchases this statement
+        // does show. A hint, not a cost basis — see visibleCost.
+        visible_cost: s.cost == null ? s.visible_cost ?? 0 : null,
+        opening_units: Number(s.open_units || 0),
         purchased_at: s.first_buy,
         source: s.rta ? `CAS (${s.rta})` : "CAS",
         transactions: s.transactions.length,
@@ -353,4 +379,4 @@ function casHoldings(parsed) {
   return rows;
 }
 
-module.exports = { pdfLines, parseCas, casHoldings, costBasis, num, isoDate };
+module.exports = { pdfLines, parseCas, casHoldings, costBasis, visibleCost, num, isoDate };

@@ -18,6 +18,14 @@ from reportlab.pdfgen import canvas
 PASSWORD = "ABCDE1234F"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cas-sample.pdf")
 
+# Every ISIN below belongs to the scheme printed beside it — verified against AMFI's live
+# list. That was not true of the first version: INF179K01XQ0 is HDFC Mid Cap Fund, and it sat
+# next to a line reading "HDFC Liquid Fund". The parser resolved the ISIN, which is the
+# identifier, and showed Mid Cap and its real NAV of 231.41 — correct behaviour that read as a
+# broken matcher. Two other ISINs were invented outright, so those rows came back "not in our
+# catalogue" and looked like a gap in the fund database. Neither was a product bug; both were
+# this file. If you add a scheme here, look its ISIN up first.
+
 # (y, [(x, text), ...]) — y counts down from the top as we draw.
 ROWS = [
     [(40, "Consolidated Account Statement")],
@@ -27,7 +35,7 @@ ROWS = [
     [],
     [(40, "HDFC Mutual Fund")],
     [(40, "Folio No: 12345678 / 90"), (220, "PAN: ABCDE1234F"), (380, "KYC: OK")],
-    [(40, "HDFC123-HDFC Liquid Fund - Growth Option"), (300, "(Advisor: ARN-0000)"), (430, "Registrar : CAMS")],
+    [(40, "HDFC123-HDFC Mid Cap Fund - Growth Option"), (300, "(Advisor: ARN-0000)"), (430, "Registrar : CAMS")],
     [(40, "ISIN: INF179K01XQ0")],
     [(300, "Opening Unit Balance:"), (450, "0.000")],
     [(40, "02-Apr-2024"), (110, "Purchase"), (300, "10,000.00"), (370, "245.678"), (440, "40.6998"), (500, "245.678")],
@@ -39,8 +47,8 @@ ROWS = [
     # Same AMC, second folio — proves folios are not collapsed together.
     [(40, "HDFC Mutual Fund")],
     [(40, "Folio No: 99887766"), (220, "PAN: ABCDE1234F")],
-    [(40, "HDFC777-HDFC Flexi Cap Fund - Direct Plan - Growth"), (400, "Registrar : CAMS")],
-    [(40, "ISIN: INF179K01XQ1")],
+    [(40, "HDFC777-HDFC Flexi Cap Fund - Growth"), (400, "Registrar : CAMS")],
+    [(40, "ISIN: INF179K01UT0")],
     [(300, "Opening Unit Balance:"), (450, "0.000")],
     [(40, "05-Apr-2024"), (110, "Purchase-SIP"), (300, "5,000.00"), (370, "3.500"), (440, "1,428.5714"), (500, "3.500")],
     [(40, "05-May-2024"), (110, "Purchase-SIP"), (300, "5,000.00"), (370, "3.400"), (440, "1,470.5882"), (500, "6.900")],
@@ -61,8 +69,8 @@ ROWS = [
     # Fully redeemed — still held units are 0, so it must NOT come back as a holding.
     [(40, "SBI Mutual Fund")],
     [(40, "Folio No: 55555555"), (220, "PAN: ABCDE1234F")],
-    [(40, "SBI001-SBI Bluechip Fund - Growth"), (400, "Registrar : CAMS")],
-    [(40, "ISIN: INF200K01RZ0")],
+    [(40, "SBI001-SBI Large Cap Fund - Growth"), (400, "Registrar : CAMS")],
+    [(40, "ISIN: INF200K01QV8")],
     [(300, "Opening Unit Balance:"), (450, "0.000")],
     [(40, "01-Jul-2024"), (110, "Purchase"), (300, "1,000.00"), (370, "10.000"), (440, "100.0000"), (500, "10.000")],
     [(40, "01-Dec-2024"), (110, "Redemption"), (300, "(1,100.00)"), (370, "(10.000)"), (440, "110.0000"), (500, "0.000")],
