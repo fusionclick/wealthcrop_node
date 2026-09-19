@@ -40,6 +40,11 @@ const fetch2FALinkRequestData = require("../requestData/fetch2FALinkRequestData"
 const mandateRequestData = require("../requestData/mandateRequestData");
 const navRequestData = require("../requestData/navRequestData");
 
+// How many instalments sxp_trxn_history returns when the caller does not ask for a number.
+// BSE treats `no_of_txn` as mandatory, so there is no "just give me all of them" — a value
+// has to be chosen, and this is the Recent-payments panel's page size.
+const XSP_HISTORY_ROWS = 50;
+
 // 30s login timeout nginx ke proxy_read_timeout se lamba tha — BSE chup ho jaye to
 // upstream ka jawab aane se pehle hi gateway 502 de deta tha. Asli login <2s leta hai.
 const LOGIN_TIMEOUT_MS = Number(process.env.BSE_LOGIN_TIMEOUT_MS) || 10000;
@@ -1206,7 +1211,12 @@ class StarMFController {
             reg_no: regNo,
             fields: ["ALL"],
             filter_param: {
-              ...(Number(input.no_of_txn) > 0 ? { no_of_txn: Number(input.no_of_txn) } : {}),
+              // BSE REQUIRES this one — omitting it answers `msgid 522, errcode "required",
+              // field "NoOfTxn"` and the whole call 502s. It was treated as optional here,
+              // so every "Recent SIP payments" load failed and the panel read "No SIP
+              // installments recorded yet" no matter how many instalments there were.
+              // Probed against the live demo host both ways: without it 522, with it success.
+              no_of_txn: Number(input.no_of_txn) > 0 ? Number(input.no_of_txn) : XSP_HISTORY_ROWS,
               ...(input.from_date ? { from_date: String(input.from_date) } : {}),
               ...(input.to_date ? { to_date: String(input.to_date) } : {}),
             },
