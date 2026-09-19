@@ -1041,7 +1041,16 @@ class StarMFController {
         row.scheme_bse_code = match.scheme_bse_code || "";
         row.scheme_category = match.category || "";
         row.matched_name = match.name || "";
-        if (Number(match.nav) > 0) row.nav = Number(match.nav);
+        // Today's price replaces the statement's for VALUATION — a CAS prints the NAV as at
+        // its own closing date, and valuing a holding now at an 18-month-old price is simply
+        // wrong. But the statement's figure is not discarded: overwriting the only NAV on
+        // screen made it look like the import had corrupted a number printed on the document
+        // the investor had just uploaded. Both are kept, and the UI labels which is which.
+        if (Number(match.nav) > 0) {
+          row.statement_nav = row.nav ?? null;
+          row.nav = Number(match.nav);
+          row.nav_source = "catalogue";
+        }
       } catch (e) {
         console.warn("[cas] catalogue lookup failed for", row.scheme_isin, e.message);
       }
