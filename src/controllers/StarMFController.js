@@ -1041,15 +1041,23 @@ class StarMFController {
         row.scheme_bse_code = match.scheme_bse_code || "";
         row.scheme_category = match.category || "";
         row.matched_name = match.name || "";
-        // Today's price replaces the statement's for VALUATION — a CAS prints the NAV as at
-        // its own closing date, and valuing a holding now at an 18-month-old price is simply
-        // wrong. But the statement's figure is not discarded: overwriting the only NAV on
-        // screen made it look like the import had corrupted a number printed on the document
-        // the investor had just uploaded. Both are kept, and the UI labels which is which.
+        // An import reproduces the document. A CAS states units and a NAV as at its own
+        // closing date, and that pair is what the statement says the holding was worth —
+        // so `nav` stays the statement's and the import's value matches the PDF line for
+        // line. Substituting today's price here was read, correctly, as the import having
+        // altered a figure printed on the file the investor had just uploaded.
+        //
+        // Today's price still travels as `current_nav` for the UI to show beside it. It is
+        // not needed for valuation: the portfolio prices every external holding from the
+        // live AMFI feed on each render (liveNav in ExternalMF), so a saved statement NAV
+        // is only the fallback for a scheme the feed does not carry.
         if (Number(match.nav) > 0) {
-          row.statement_nav = row.nav ?? null;
-          row.nav = Number(match.nav);
-          row.nav_source = "catalogue";
+          row.current_nav = Number(match.nav);
+          // Statement printed no NAV of its own — then today's is the only price there is.
+          if (!(Number(row.nav) > 0)) {
+            row.nav = Number(match.nav);
+            row.nav_source = "catalogue";
+          }
         }
       } catch (e) {
         console.warn("[cas] catalogue lookup failed for", row.scheme_isin, e.message);
