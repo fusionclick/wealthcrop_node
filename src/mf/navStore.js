@@ -101,4 +101,26 @@ const entry = (navs = {}, isin, code) => {
 const navFor = (navs, isin, code) => entry(navs, isin, code)?.nav ?? null;
 const navDateFor = (navs, isin, code) => entry(navs, isin, code)?.date ?? null;
 
-module.exports = { getNavs, refresh, navFor, navDateFor, mapNavRows };
+/**
+ * Is this NAV plausibly the price of the thing that was actually bought?
+ *
+ * ISINs sit next to each other across a fund's plans, so a wrong or stale one resolves to a
+ * real price belonging to a different scheme. Valuing with it produced +2350% on an ₹18,000
+ * holding during a regression pass — a number an investor would act on. More than 5x away
+ * from what was paid per unit is not a gain, it is the wrong scheme.
+ *
+ * Mirrors navLooksPlausible() in the frontend's utils/nodeApi.js, which applies the same
+ * rule to externally-held units. With no cost basis there is nothing to compare against,
+ * so the price is accepted rather than invented around.
+ */
+function navLooksPlausible(invested, units, nav) {
+  const n = Number(nav);
+  if (!Number.isFinite(n) || n <= 0) return false;
+  const inv = Number(invested);
+  const u = Number(units);
+  if (!(u > 0) || !(inv > 0)) return true;
+  const avgCost = inv / u;
+  return n <= avgCost * 5 && n >= avgCost / 5;
+}
+
+module.exports = { getNavs, refresh, navFor, navDateFor, mapNavRows, navLooksPlausible };

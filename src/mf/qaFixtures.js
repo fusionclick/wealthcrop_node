@@ -55,7 +55,11 @@ const SCHEMES = {
   },
   debt: {
     scheme: "HDLFDDN-DR",
-    scheme_isin: "INF179K01YV8",
+    // No ISIN on purpose. The one guessed here resolved to a neighbouring plan whose real
+    // NAV is ~24x this fixture's, and the portfolio reported +2350% on it. Without an ISIN
+    // the scheme simply is not priced, which is the honest half of the pair: one holding
+    // that values and one that cannot, so QA sees both paths.
+    scheme_isin: "",
     src_scheme_name: "HDFC LIQUID FUND - DIRECT PLAN - GROWTH",
     scheme_category: "Debt",
     folio_num: "QA1000002",

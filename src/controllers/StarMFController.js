@@ -6,7 +6,7 @@ const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChar
 const { getEnrichment } = require("../mf/kuvera");
 const { benchmarkSeries, benchmarkFor } = require("../mf/benchmark");
 const { loadFundNav } = require("../mf/mfapi");
-const { getNavs, navFor, navDateFor } = require("../mf/navStore");
+const { getNavs, navFor, navDateFor, navLooksPlausible } = require("../mf/navStore");
 const { getCatalogue, schemeCategories, AMFI_FALLBACK } = require("../mf/catalogue");
 const { getHidden, isHidden } = require("../mf/hidden");
 const { getAmfiNavs } = require("../mf/amfiNav");
@@ -1558,12 +1558,18 @@ class StarMFController {
           const inv = Math.round(h.inv_amo * 100) / 100;
           const units = Math.round(h.units * 1000) / 1000;
           const today = navs ? navFor(navs, h.scheme_isin, h.scheme_bse_code) : null;
-          const value = today > 0 && units > 0 ? units * today : null;
+
+          // A NAV far from what was actually paid per unit belongs to a different plan under
+          // a neighbouring ISIN, not to this holding. Refuse to value rather than publish it.
+          const plausible = navLooksPlausible(inv, units, today);
+          const value = plausible && units > 0 ? units * today : null;
           return {
             ...h,
             inv_amo: inv,
             units,
-            current_nav: today ?? null,
+            // Only report the price we were willing to value at, so the UI never shows a
+            // NAV next to a blank valuation and invites someone to do the sum themselves.
+            current_nav: plausible ? today : null,
             current_value: value == null ? null : Math.round(value * 100) / 100,
             ret_percentage:
               value == null || inv <= 0 ? null : Math.round(((value - inv) / inv) * 10000) / 100,
