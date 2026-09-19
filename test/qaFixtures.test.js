@@ -106,3 +106,18 @@ test("an unknown service method is never answered from the book", () => {
   const qa = load();
   assert.equal(qa.answer("createPhysicalUcc", { data: { ucc: QA } }), null);
 });
+
+test("an order id from the book is answered here, not sent to BSE", () => {
+  process.env.MF_QA_UCC = QA;
+  const qa = load();
+  qa.reset();
+
+  const first = qa.answer("getAllOrders", ordersReq(QA)).data.lists[0];
+  // The detail lookup carries only an id — no client code anywhere in the payload.
+  const detail = qa.answer("getOrder", { data: { id: first.id } });
+  assert.ok(detail, "an id we invented cannot be resolved at BSE, so it must resolve here");
+  assert.equal(detail.data.id, first.id);
+
+  // An id that is not ours still goes to BSE.
+  assert.equal(qa.answer("getOrder", { data: { id: 123456789 } }), null);
+});

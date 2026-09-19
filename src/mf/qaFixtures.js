@@ -170,11 +170,16 @@ function bookFor(reqObj) {
   const hit = uccList().find((u) => blob.includes(u));
   if (hit) return [hit, book(hit)];
 
-  const reg = blob.match(/QA(?:SIP|SWP|STP)\d+/)?.[0];
-  if (!reg) return null;
+  // A registration or order id on its own — cancel/pause carry no client code, and neither
+  // does the order-detail lookup behind a history row.
+  const reg = blob.match(/QA(?:SIP|SWP|STP)\d+/)?.[0] || null;
+  const id = Number(reqObj?.data?.id ?? reqObj?.data?.order_id);
+  if (!reg && !Number.isFinite(id)) return null;
+
   for (const ucc of uccList()) {
     const b = book(ucc);
-    if (b?.sxp.some((s) => s.reg_no === reg)) return [ucc, b];
+    if (reg && b?.sxp.some((s) => s.reg_no === reg)) return [ucc, b];
+    if (Number.isFinite(id) && b?.orders.some((o) => o.id === id)) return [ucc, b];
   }
   return null;
 }
@@ -204,6 +209,15 @@ function answer(serviceMethod, reqObj) {
 
     case "getXsp":
       return find() ? ok([find()]) : ok([]);
+
+    // An order id from this book does not exist at BSE, so the detail lookup behind a
+    // history row was answering `record_not_found` on every poll. The ids are ours; the
+    // answer has to be ours too.
+    case "getOrder": {
+      const id = Number(reqObj?.data?.id ?? reqObj?.data?.order_id);
+      const row = b.orders.find((o) => o.id === id);
+      return row ? { status: "success", data: row } : null;
+    }
 
     // Ticket 20. The caller has already refused an order that is not active, so reaching
     // here means the change is allowed.
