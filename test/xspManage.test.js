@@ -8,6 +8,7 @@ const {
   buildResumeXspPayload,
   buildTopupXspPayload,
   validateTopup,
+  validateSip,
   mergeSipChanges,
   CANCEL_BY_INVESTOR,
 } = require("../src/mf/xsp");
@@ -312,4 +313,47 @@ describe("modify keeps a SIP running instead of refusing it", () => {
     );
     assert.equal(merged.end_date, "2030-01-10");
   });
+
+  // QA round 6: dropping the stale end date was only half of it. A registration with no
+  // instalment count then had NO term at all, validateSxp computed 0, and the modify was
+  // refused with the very message the previous fix was supposed to remove.
+  it("a registration with neither an end date nor a count still gets a term", () => {
+    const merged = mergeSipChanges(
+      { src_scheme: "PP001ZG-GR", amount: 5000, freq: "m" },
+      { amount: 7000, start_date: "2026-10-10" }
+    );
+
+    assert.equal(merged.end_date, null);
+    assert.equal(merged.ninstallments, 120, "10 years monthly — what a fresh SIP opens on");
+    // And the whole point: this now passes the validator instead of being refused.
+    assert.equal(validateSip(merged), null);
+  });
+
+  it("the registration's own instalment count wins over the default", () => {
+    const merged = mergeSipChanges(
+      { src_scheme: "PP001ZG-GR", amount: 5000, freq: "m", ninstallments: 36 },
+      { amount: 7000, start_date: "2026-10-10" }
+    );
+    assert.equal(merged.ninstallments, 36);
+    assert.equal(validateSip(merged), null);
+  });
+
+  it("a quarterly SIP gets a quarterly term, not a monthly one", () => {
+    const merged = mergeSipChanges(
+      { src_scheme: "PP001ZG-GR", amount: 5000, freq: "q" },
+      { amount: 7000, start_date: "2026-10-10" }
+    );
+    assert.equal(merged.ninstallments, 40, "10 years at 4 a year");
+  });
+
+  it("a live end date is still used, and no count is invented over it", () => {
+    const merged = mergeSipChanges(
+      { src_scheme: "PP001ZG-GR", amount: 5000, freq: "m", end_date: "2030-01-10" },
+      { amount: 7000, start_date: "2026-10-10" }
+    );
+    assert.equal(merged.end_date, "2030-01-10");
+    assert.equal(merged.ninstallments, null, "the dates describe the term");
+    assert.equal(validateSip(merged), null);
+  });
 });
+

@@ -93,6 +93,9 @@ const sxp = (ucc, reg_no, scheme, extra) => ({
   mandate_status: "APPROVED",
   freq: "m",
   txn_date: 10,
+  // Real sxp_list carries the registered instalment count, and a modify re-registers with
+  // it. Leaving it out here made the fixture easier to satisfy than production.
+  ninstallments: 120,
   ...extra,
 });
 

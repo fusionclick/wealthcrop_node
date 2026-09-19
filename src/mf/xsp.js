@@ -33,6 +33,9 @@
 
 const FREQ = { m: 12, q: 4, w: 52 };
 const MAX_INSTALLMENTS = 1200;
+// The horizon a fresh SIP opens on in the form (SIPSetupPage seeds `years` at 10). Reused
+// when a modify has to invent a term because the registration carries none.
+const DEFAULT_SIP_YEARS = 10;
 
 const isoDay = (v) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || "").trim());
@@ -323,6 +326,17 @@ function mergeSipChanges(existing = {}, changes = {}) {
   const carriedEnd = isoDay(changes.end_date) || isoDay(existing.end_date) || null;
   const end = carriedEnd && (!start || carriedEnd > start) ? carriedEnd : null;
 
+  // Dropping the stale end date was only half of it: a registration that records no
+  // instalment count either then has NO term at all, `validateSxp` computes 0 instalments,
+  // and the modify is refused with the very message that was supposed to be fixed.
+  //
+  // The investor is not asked for a term here — the modify form offers amount, date and
+  // frequency, nothing else — so refusing them over a field they were never shown is the
+  // wrong answer. Carry the registration's own count when it has one; otherwise open on the
+  // same horizon a brand new SIP does, which is what the fresh-SIP form already defaults to.
+  const carriedCount = Number(pick(changes.ninstallments, existing.ninstallments)) || null;
+  const ninstallments = carriedCount || (end ? null : (FREQ[freq] || FREQ.m) * DEFAULT_SIP_YEARS);
+
   return {
     scheme: String(pick(changes.scheme, existing.src_scheme || existing.scheme || "")).trim(),
     amount: Number(pick(changes.amount, existing.amount)),
@@ -331,7 +345,7 @@ function mergeSipChanges(existing = {}, changes = {}) {
     // txn_date follows start_date; BSE rejects the pair when they disagree (msgid 3809).
     txn_date: start ? Number(start.slice(8, 10)) : Number(pick(changes.txn_date, existing.txn_date)),
     end_date: end,
-    ninstallments: Number(pick(changes.ninstallments, existing.ninstallments)) || null,
+    ninstallments,
   };
 }
 
