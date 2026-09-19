@@ -97,4 +97,23 @@ describe("holdings fold onto scheme + folio", () => {
     assert.equal(rows.length, 1);
     assert.equal(rows[0].inv_amo, 10000, "the pending order's money is not invested yet");
   });
+
+  it("prices the position instead of hard-coding a zero return", async () => {
+    // `ret_percentage` used to be the literal 0 on every row, and everything downstream
+    // reads it — the Returns tile, sort-by-returns, and through `invested + returns` the
+    // value handed to XIRR. So the portfolio reported a flat 0% and a confident ~0% p.a.
+    //
+    // order_list's own `nav` is the ALLOTMENT nav, the price that was paid, so it can never
+    // show a gain. The valuation comes from the AMFI NAV store instead. No store is
+    // reachable from a test run, which is exactly the case worth pinning: unknown must
+    // report null, because "not known" and "no gain" are different answers.
+    stubBse([order({ amount: 10000, units: 200, nav: 50 })]);
+
+    const [row] = await holdings();
+    assert.ok("current_nav" in row, "the UI needs to know whether a price was found at all");
+    assert.ok("current_value" in row);
+    assert.equal(row.current_value, null);
+    assert.equal(row.ret_percentage, null, "never 0 — that is a claim, not a missing value");
+    assert.equal(row.inv_amo, 10000, "and the cost is still reported");
+  });
 });

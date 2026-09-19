@@ -1534,11 +1534,38 @@ class StarMFController {
         if (Number(o.nav) > 0) existing.nav = Number(o.nav);
       }
 
+      // Today's price, so a holding can be valued at all.
+      //
+      // `ret_percentage` used to be the literal 0 on every row. Everything downstream reads
+      // it: the dashboard's Returns tile, the sort-by-returns control, and — through
+      // `currentValue = invested + returns` — the input to XIRR. So the portfolio reported a
+      // flat 0% return and a ~0% p.a. rate with total confidence, on any account.
+      //
+      // The `nav` on an order_list row is the ALLOTMENT nav, the price that was paid; it
+      // cannot value anything today. This is the same AMFI store the fund pages price from.
+      // A scheme it does not know stays null rather than 0 — "not known" and "no gain" are
+      // different answers and only one of them is honest.
+      const navs = await getNavs(this).catch(() => null);
+
       const holdings = Array.from(byFolio.values())
         // A folio sold down to nothing is not a holding. Keeping it would offer the
         // investor a Redeem button for units they no longer have.
         .filter((h) => h.inv_amo > 0 || h.units > 0)
-        .map((h) => ({ ...h, inv_amo: Math.round(h.inv_amo * 100) / 100, units: Math.round(h.units * 1000) / 1000 }));
+        .map((h) => {
+          const inv = Math.round(h.inv_amo * 100) / 100;
+          const units = Math.round(h.units * 1000) / 1000;
+          const today = navs ? navFor(navs, h.scheme_isin, h.scheme_bse_code) : null;
+          const value = today > 0 && units > 0 ? units * today : null;
+          return {
+            ...h,
+            inv_amo: inv,
+            units,
+            current_nav: today ?? null,
+            current_value: value == null ? null : Math.round(value * 100) / 100,
+            ret_percentage:
+              value == null || inv <= 0 ? null : Math.round(((value - inv) / inv) * 10000) / 100,
+          };
+        });
       // ponytail: unpaid orders holding nahi hain, magar UI ko farq batana hai —
       // "kuch invest hi nahi kiya" aur "payment adhoori hai" ek jaisa nahi dikhna chahiye.
       const pending = rows.length - items.length;
