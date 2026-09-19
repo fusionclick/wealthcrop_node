@@ -1545,7 +1545,10 @@ class StarMFController {
       // cannot value anything today. This is the same AMFI store the fund pages price from.
       // A scheme it does not know stays null rather than 0 — "not known" and "no gain" are
       // different answers and only one of them is honest.
-      const navs = await getNavs(this).catch(() => null);
+      // `{ navs }` — getNavs returns the wrapper { at, loaded, date, navs } and every lookup
+      // helper wants the flat map inside it. Passing the wrapper looks fine and silently
+      // resolves nothing, which is how this shipped once already.
+      const { navs } = (await getNavs(this).catch(() => null)) || {};
 
       const holdings = Array.from(byFolio.values())
         // A folio sold down to nothing is not a holding. Keeping it would offer the

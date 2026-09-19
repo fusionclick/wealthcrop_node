@@ -90,7 +90,14 @@ async function getNavs(controller) {
   return inflight;
 }
 
-const entry = (navs = {}, isin, code) => navs[key(isin)] || navs[key(code)] || null;
+// Takes either the flat map or the whole store getNavs() returns. Handing it the wrapper by
+// mistake used to resolve nothing at all, silently: every lookup came back null while the
+// store sat there with 17k prices loaded, and the symptom was a portfolio nothing could
+// price. One unwrap here is cheaper than that failure finding the next caller.
+const entry = (navs = {}, isin, code) => {
+  const flat = navs?.navs || navs;
+  return flat[key(isin)] || flat[key(code)] || null;
+};
 const navFor = (navs, isin, code) => entry(navs, isin, code)?.nav ?? null;
 const navDateFor = (navs, isin, code) => entry(navs, isin, code)?.date ?? null;
 
