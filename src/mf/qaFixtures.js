@@ -153,6 +153,35 @@ function seed(ucc) {
   };
 }
 
+/**
+ * The instalments a registration has actually put through, newest first.
+ *
+ * Derived from the registration rather than listed separately, so the two can never drift:
+ * a SIP that says it started 11 months ago and pays ₹5,000 a month has exactly the history
+ * that implies. Only SIPs debit money in; an SWP or STP pays out of the fund, and its rows
+ * would need the opposite sign, so they get none rather than a wrong one.
+ */
+function instalmentsFor(reg) {
+  if (String(reg.sxp_type || "").toUpperCase() !== "SIP") return [];
+  const start = new Date(reg.start_date);
+  if (Number.isNaN(start.getTime())) return [];
+
+  const rows = [];
+  const now = new Date();
+  for (let i = 0, d = new Date(start); d <= now && i < 240; i++, d.setMonth(d.getMonth() + 1)) {
+    rows.push({
+      id: `${reg.reg_no}-${String(i + 1).padStart(3, "0")}`,
+      txn_id: `${reg.reg_no}-${String(i + 1).padStart(3, "0")}`,
+      reg_no: reg.reg_no,
+      ucc: reg.ucc,
+      txn_date: d.toISOString().slice(0, 10),
+      amount: Number(reg.amount) || 0,
+      status: "SUCCESS",
+    });
+  }
+  return rows.reverse();
+}
+
 const books = new Map();
 
 function book(ucc) {
@@ -216,6 +245,16 @@ function answer(serviceMethod, reqObj) {
 
     case "getXsp":
       return find() ? ok([find()]) : ok([]);
+
+    // The instalments behind a registration. Without this the Recent SIP payments panel
+    // asked BSE about a reg_no only this book knows, and got "reg_no is not recognised" —
+    // the same class of gap the order-detail lookup had.
+    case "getXspTrxnHistory": {
+      const row = find();
+      if (!row) return null;
+      const want = Number(reqObj?.data?.filter_param?.no_of_txn) || 50;
+      return ok(instalmentsFor(row).slice(0, want));
+    }
 
     // An order id from this book does not exist at BSE, so the detail lookup behind a
     // history row was answering `record_not_found` on every poll. The ids are ours; the

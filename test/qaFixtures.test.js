@@ -121,3 +121,41 @@ test("an order id from the book is answered here, not sent to BSE", () => {
   // An id that is not ours still goes to BSE.
   assert.equal(qa.answer("getOrder", { data: { id: 123456789 } }), null);
 });
+
+test("the instalments behind a SIP are answered here too", () => {
+  process.env.MF_QA_UCC = QA;
+  const qa = load();
+  qa.reset();
+
+  const sip = qa.answer("getAllXsp", xspReq(QA)).data.lists.find((r) => r.sxp_type === "SIP");
+  const hist = qa.answer("getXspTrxnHistory", { data: { reg_no: sip.reg_no, filter_param: { no_of_txn: 50 } } });
+
+  assert.ok(hist, "the reg_no is ours, so BSE cannot recognise it — this must answer");
+  const rows = hist.data.lists;
+  assert.ok(rows.length > 1, "a SIP running since last year has more than one instalment");
+  // Derived from the registration, so the two can never disagree.
+  assert.ok(rows.every((r) => r.amount === sip.amount));
+  assert.ok(rows.every((r) => r.reg_no === sip.reg_no));
+  // Newest first, the way the panel lists them.
+  assert.ok(rows[0].txn_date > rows[rows.length - 1].txn_date);
+});
+
+test("no_of_txn actually limits what comes back", () => {
+  process.env.MF_QA_UCC = QA;
+  const qa = load();
+  qa.reset();
+
+  const sip = qa.answer("getAllXsp", xspReq(QA)).data.lists.find((r) => r.sxp_type === "SIP");
+  const three = qa.answer("getXspTrxnHistory", { data: { reg_no: sip.reg_no, filter_param: { no_of_txn: 3 } } });
+  assert.equal(three.data.lists.length, 3);
+});
+
+test("an SWP has no debit history — the wrong sign is worse than none", () => {
+  process.env.MF_QA_UCC = QA;
+  const qa = load();
+  qa.reset();
+
+  const swp = qa.answer("getAllXsp", xspReq(QA)).data.lists.find((r) => r.sxp_type === "SWP");
+  const hist = qa.answer("getXspTrxnHistory", { data: { reg_no: swp.reg_no, filter_param: { no_of_txn: 50 } } });
+  assert.equal(hist.data.lists.length, 0);
+});
