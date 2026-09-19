@@ -314,6 +314,15 @@ function mergeSipChanges(existing = {}, changes = {}) {
   const pick = (a, b) => (a === undefined || a === null || a === "" ? b : a);
   const freq = String(pick(changes.freq, existing.freq || "m")).toLowerCase();
   const start = isoDay(changes.start_date) || null;
+
+  // A modify re-registers the SIP, so its start date moves to the next valid occurrence —
+  // always in the future. Carrying the old end date across then described a term that had
+  // already run out: `installmentsBetween` returned 0 and every modify was refused with
+  // "Choose a SIP end date after the start date", for a field the investor was never shown.
+  // An end date that no longer sits after the start is stale data, not an instruction.
+  const carriedEnd = isoDay(changes.end_date) || isoDay(existing.end_date) || null;
+  const end = carriedEnd && (!start || carriedEnd > start) ? carriedEnd : null;
+
   return {
     scheme: String(pick(changes.scheme, existing.src_scheme || existing.scheme || "")).trim(),
     amount: Number(pick(changes.amount, existing.amount)),
@@ -321,7 +330,7 @@ function mergeSipChanges(existing = {}, changes = {}) {
     start_date: start,
     // txn_date follows start_date; BSE rejects the pair when they disagree (msgid 3809).
     txn_date: start ? Number(start.slice(8, 10)) : Number(pick(changes.txn_date, existing.txn_date)),
-    end_date: isoDay(changes.end_date) || isoDay(existing.end_date) || null,
+    end_date: end,
     ninstallments: Number(pick(changes.ninstallments, existing.ninstallments)) || null,
   };
 }

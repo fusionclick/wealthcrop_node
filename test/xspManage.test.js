@@ -287,3 +287,29 @@ describe("ticket 21: modification never leaves the investor with no SIP", () => 
     assert.equal(sent.some((c) => c.method === "xspRegister"), false);
   });
 });
+
+describe("modify keeps a SIP running instead of refusing it", () => {
+  // QA: every modify of an existing SIP came back "Choose a SIP end date after the start
+  // date" — for a field the modify form never shows. A modify re-registers the SIP, so its
+  // start moves into the future, and the old end date carried across then described a term
+  // that had already run out.
+  it("does not inherit an end date the new start has already passed", () => {
+    const merged = mergeSipChanges(
+      { src_scheme: "PP001ZG-GR", amount: 5000, freq: "m", txn_date: 10, end_date: "2026-01-10" },
+      { amount: 7000, start_date: "2026-10-10" }
+    );
+
+    assert.equal(merged.end_date, null, "a term that ended before the new start is stale, not an instruction");
+    assert.equal(merged.amount, 7000);
+    assert.equal(merged.start_date, "2026-10-10");
+    assert.equal(merged.txn_date, 10);
+  });
+
+  it("keeps an end date that is still ahead of the new start", () => {
+    const merged = mergeSipChanges(
+      { src_scheme: "PP001ZG-GR", amount: 5000, freq: "m", end_date: "2030-01-10" },
+      { amount: 7000, start_date: "2026-10-10" }
+    );
+    assert.equal(merged.end_date, "2030-01-10");
+  });
+});

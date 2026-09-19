@@ -1490,20 +1490,55 @@ class StarMFController {
         catIndex[String(o.scheme_isin || "").trim().toUpperCase()] ||
         o.scheme_category ||
         "Mutual Fund";
-      const holdings = items.map((o) => ({
-        // ponytail: BSE ke apne key naam — order_list `src_scheme_name` aur `folio_num`
-        // deta hai. Purane naam pehle padhe ja rahe the, is liye folio hamesha khali
-        // milta tha aur redeem "Folio is missing" par ruk jata.
-        scheme_name: o.src_scheme_name || o.scheme_name || o.scheme,
-        scheme_bse_code: o.scheme,
-        inv_amo: Number(o.amount || 0),
-        folio: o.folio_num || o.folio || "",
-        units: Number(o.units || 0),
-        nav: Number(o.nav || 0),
-        status: o.status,
-        ret_percentage: 0,
-        scheme_category: categoryOfRow(o),
-      }));
+      // A holding is a POSITION, not an order. order_list hands back one row per
+      // transaction, and mapping those straight through meant three purchases into one
+      // folio showed as three identical lines in the portfolio and three identical
+      // entries in the Redeem and Switch dropdowns — with a third of the money on each.
+      // Fold them onto scheme + folio, which is what a folio IS.
+      //
+      // Redemptions and switch-outs have to come back OFF the position; adding their
+      // amount would report more invested after selling than before.
+      const OUT = /^(r|redeem|redemption|sw[\s_-]*out|switch[\s_-]*out|stp[\s_-]*out|swp)$/i;
+      const signOf = (o) => (OUT.test(String(o.trxn_type || o.order_type || "").trim()) ? -1 : 1);
+
+      const byFolio = new Map();
+      for (const o of items) {
+        const code = String(o.scheme || "").trim();
+        const folio = o.folio_num || o.folio || "";
+        const key = `${code.toUpperCase()}|${folio}`;
+        const sign = signOf(o);
+        const existing = byFolio.get(key);
+        if (!existing) {
+          byFolio.set(key, {
+            // ponytail: BSE ke apne key naam — order_list `src_scheme_name` aur `folio_num`
+            // deta hai. Purane naam pehle padhe ja rahe the, is liye folio hamesha khali
+            // milta tha aur redeem "Folio is missing" par ruk jata.
+            scheme_name: o.src_scheme_name || o.scheme_name || o.scheme,
+            scheme_bse_code: o.scheme,
+            scheme_isin: o.scheme_isin || "",
+            inv_amo: sign * Number(o.amount || 0),
+            folio,
+            units: sign * Number(o.units || 0),
+            // Latest NAV wins; an average of NAVs across dates is not a price of anything.
+            nav: Number(o.nav || 0),
+            status: o.status,
+            ret_percentage: 0,
+            scheme_category: categoryOfRow(o),
+            orders: 1,
+          });
+          continue;
+        }
+        existing.inv_amo += sign * Number(o.amount || 0);
+        existing.units += sign * Number(o.units || 0);
+        existing.orders += 1;
+        if (Number(o.nav) > 0) existing.nav = Number(o.nav);
+      }
+
+      const holdings = Array.from(byFolio.values())
+        // A folio sold down to nothing is not a holding. Keeping it would offer the
+        // investor a Redeem button for units they no longer have.
+        .filter((h) => h.inv_amo > 0 || h.units > 0)
+        .map((h) => ({ ...h, inv_amo: Math.round(h.inv_amo * 100) / 100, units: Math.round(h.units * 1000) / 1000 }));
       // ponytail: unpaid orders holding nahi hain, magar UI ko farq batana hai —
       // "kuch invest hi nahi kiya" aur "payment adhoori hai" ek jaisa nahi dikhna chahiye.
       const pending = rows.length - items.length;
