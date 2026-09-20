@@ -144,8 +144,14 @@ const buy = (over = {}, dataOver = {}) => ({
     ...dataOver,
   },
 });
-const sell = (over = {}) => ({
-  data: { orders: [{ type: "r", scheme: "007G", amount: 2000, folio: "F123", mem_ord_ref_id: "REF2", ...over }] },
+// A redemption skips the SUITABILITY gate but still takes the disclaimer one (ticket 22
+// names redemption), so it carries the acknowledgement like every other order.
+const sell = (over = {}, dataOver = {}) => ({
+  data: {
+    orders: [{ type: "r", scheme: "007G", amount: 2000, folio: "F123", mem_ord_ref_id: "REF2", ...over }],
+    acknowledged: ACKS,
+    ...dataOver,
+  },
 });
 // A switch buys into dest_scheme, so it takes the same gates a purchase does.
 const swap = (over = {}, dataOver = {}) => ({
@@ -431,7 +437,7 @@ describe("order path end to end", () => {
     investorResponse = okInvestor();
   });
 
-  it("neither gate applies to a redemption", async () => {
+  it("the suitability gate does not apply to a redemption", async () => {
     // Gating a sell would trap an investor in a fund their profile no longer permits.
     investorResponse = okInvestor({ riskProfile: null });
     sent = null;
@@ -439,6 +445,16 @@ describe("order path end to end", () => {
     assert.equal(r.status, 200);
     assert.ok(sent, "a redemption must still reach BSE");
     investorResponse = okInvestor();
+  });
+
+  it("ticket 22: the disclaimer gate DOES apply to a redemption", async () => {
+    // Ticking a box traps nobody, and ticket 22 names redemption and SWP explicitly — so
+    // the exemption that keeps suitability off a sell must not carry the disclaimer with it.
+    sent = null;
+    const r = await post("/purchaseNewOrder", sell({}, { acknowledged: undefined }));
+    assert.equal(r.status, 403);
+    assert.equal(r.body.code, "disclaimer_not_acknowledged");
+    assert.equal(sent, null, "BSE was called for an unacknowledged redemption");
   });
 
   it("ticket 22: the disclaimer text is served for the checkout screens", async () => {

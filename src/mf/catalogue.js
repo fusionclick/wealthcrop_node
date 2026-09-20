@@ -299,6 +299,11 @@ const TXN_FILTERS = {
   stp: (f) => f.txn?.stp === true,
   switch: (f) => f.txn?.switchAllowed === true,
   redemption: (f) => f.txn?.redemption === true,
+  // Ticket 2 — what the scheme does with distributed income. Not a lumpsum[]/systematic[]
+  // rulebook like the rest: it is BSE's own scheme_option, normalised by payoutOf(), and
+  // sits on the same index row as `txn`.
+  idcw_payout: (f) => f.payout === "IDCW Payout",
+  idcw_reinvest: (f) => f.payout === "IDCW Reinvestment",
 };
 
 // Ranking. Only metrics that are actually on an index row — returns/age/rating arrive from

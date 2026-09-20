@@ -917,17 +917,24 @@ class StarMFController {
   };
 
   /**
-   * The two pre-order gates every purchase path shares (tickets 22, 24).
+   * The two pre-order gates every order path shares (tickets 22, 24).
    *
    * Returns the refusal body, or null to let the order through. One function because
    * /purchaseNewOrder, /xspRegister and /modifyXsp are three doors into the same room —
    * gating one of them is the same as gating none.
+   *
+   * The two gates have different reach, and conflating them is what left a SWP with no
+   * disclaimer at all. SUITABILITY is buy-only on purpose: refusing a sell would trap an
+   * investor in a fund their profile no longer permits. DISCLAIMERS trap nobody — ticking a
+   * box is not a refusal — and ticket 22 names SWP and redemption explicitly, so they run on
+   * every path. `suitability:false` is how a selling path says which of the two it skips.
    */
-  async gateOrder(req, rawScheme) {
+  async gateOrder(req, rawScheme, { suitability = true } = {}) {
     const disclaimed = checkDisclaimers(req.body?.data || req.body || {});
     if (!disclaimed.ok) {
       return { status: "error", code: disclaimed.code, message: disclaimed.message, required: disclaimed.required };
     }
+    if (!suitability) return null;
     // lookupScheme hands back BSE's raw master row, which carries a category but no SEBI
     // riskometer level — BSE's master has no such column. Map it, then ask the enrichment
     // source for the level, exactly as the fund page does. Fail-open there means the
@@ -1101,14 +1108,13 @@ class StarMFController {
     const invalid = validateSxp({ ...input, sxp_type: type, scheme }, { available });
     if (invalid) return res.status(400).json({ status: "error", message: invalid });
 
-    // A SIP and an STP both BUY — repeatedly — so they take the same gates a lumpsum does,
-    // and an STP is judged on the fund it buys into. A SWP only sells, so it is exempt for
-    // the same reason a redemption is: gating it would trap the investor.
-    if (type !== "swp") {
-      const target = await this.lookupScheme(type === "stp" ? input.dest_scheme : scheme);
-      const gate = await this.gateOrder(req, target);
-      if (gate) return res.status(403).json(gate);
-    }
+    // A SIP and an STP both BUY — repeatedly — so they take both gates, and an STP is judged
+    // on the fund it buys into. A SWP only sells: it skips SUITABILITY for the same reason a
+    // redemption does, but still takes the disclaimer gate (ticket 22 names it).
+    const sells = type === "swp";
+    const target = sells ? null : await this.lookupScheme(type === "stp" ? input.dest_scheme : scheme);
+    const gate = await this.gateOrder(req, target, { suitability: !sells });
+    if (gate) return res.status(403).json(gate);
 
     const kyc = req.investor?.kyc || {};
     const reqObj = buildXspRegisterPayload(
@@ -1402,17 +1408,17 @@ class StarMFController {
     if (!limits.ok) {
       return res.status(400).json({ status: "error", message: limits.error });
     }
-    // Tickets 22 and 24, on anything that BUYS. A redemption is deliberately exempt:
-    // gating a sell would trap an investor in a fund their profile no longer permits.
+    // Tickets 22 and 24. SUITABILITY only on anything that BUYS — gating a sell would trap
+    // an investor in a fund their profile no longer permits. DISCLAIMERS on every type,
+    // redemption included, because ticket 22 names it and a tick-box traps nobody.
     //
-    // A switch counts. It buys into dest_scheme, so that is the scheme to judge — judging
-    // the source, which is being sold, would make type:"sw" the way around the whole gate.
+    // A switch counts as a buy. It buys into dest_scheme, so that is the scheme to judge —
+    // judging the source, which is being sold, would make type:"sw" the way around the gate.
     const orderType = String(parsed.order.type || "").toLowerCase();
-    if (orderType === "p" || orderType === "sw") {
-      const target = orderType === "sw" ? await this.lookupScheme(parsed.order.dest_scheme) : scheme;
-      const gate = await this.gateOrder(req, target);
-      if (gate) return res.status(403).json(gate);
-    }
+    const buys = orderType === "p" || orderType === "sw";
+    const target = buys ? (orderType === "sw" ? await this.lookupScheme(parsed.order.dest_scheme) : scheme) : null;
+    const gate = await this.gateOrder(req, target, { suitability: buys });
+    if (gate) return res.status(403).json(gate);
     const mobile = normalizeMobile(parsed.order.mobnum) || investorMobile(req.investor);
     const dp = parsed.order.depository_acct?.dp_id ? parsed.order.depository_acct : await this.lookupDepository(ucc);
     // ponytail: payload wahi jo order 5001433387 par chala tha — scheme code jaisa
