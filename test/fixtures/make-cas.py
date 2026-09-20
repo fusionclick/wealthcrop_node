@@ -15,8 +15,19 @@ from pypdf import PdfReader, PdfWriter
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
-PASSWORD = "ABCDE1234F"
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cas-sample.pdf")
+# A statement is issued to a PAN, and casImport refuses one whose PAN is not the signed-in
+# investor's (cas_pan_mismatch, 403). So testing the import against a real account means
+# building a copy issued to THAT account's PAN — otherwise the upload is rejected before a
+# single holding is parsed, which reads as "the import is broken".
+#
+#   CAS_PAN=XXXXX0000X CAS_OUT=/tmp/mine.pdf python test/fixtures/make-cas.py
+#
+# A real CAS uses the PAN as its own password, and so does this one.
+PAN = os.environ.get("CAS_PAN", "ABCDE1234F").strip().upper()
+PASSWORD = PAN
+OUT = os.environ.get("CAS_OUT") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "cas-sample.pdf"
+)
 
 # Every ISIN below belongs to the scheme printed beside it — verified against AMFI's live
 # list. That was not true of the first version: INF179K01XQ0 is HDFC Mid Cap Fund, and it sat
@@ -31,10 +42,10 @@ ROWS = [
     [(40, "Consolidated Account Statement")],
     [(40, "01-Apr-2024"), (130, "To"), (160, "31-Mar-2025")],
     [(40, "Email Id: investor@example.com")],
-    [(40, "PAN: ABCDE1234F"), (200, "KYC: OK"), (300, "PAN: OK")],
+    [(40, f"PAN: {PAN}"), (200, "KYC: OK"), (300, "PAN: OK")],
     [],
     [(40, "HDFC Mutual Fund")],
-    [(40, "Folio No: 12345678 / 90"), (220, "PAN: ABCDE1234F"), (380, "KYC: OK")],
+    [(40, "Folio No: 12345678 / 90"), (220, f"PAN: {PAN}"), (380, "KYC: OK")],
     [(40, "HDFC123-HDFC Mid Cap Fund - Growth Option"), (300, "(Advisor: ARN-0000)"), (430, "Registrar : CAMS")],
     [(40, "ISIN: INF179K01XQ0")],
     [(300, "Opening Unit Balance:"), (450, "0.000")],
@@ -46,7 +57,7 @@ ROWS = [
     [],
     # Same AMC, second folio — proves folios are not collapsed together.
     [(40, "HDFC Mutual Fund")],
-    [(40, "Folio No: 99887766"), (220, "PAN: ABCDE1234F")],
+    [(40, "Folio No: 99887766"), (220, f"PAN: {PAN}")],
     [(40, "HDFC777-HDFC Flexi Cap Fund - Growth"), (400, "Registrar : CAMS")],
     [(40, "ISIN: INF179K01UT0")],
     [(300, "Opening Unit Balance:"), (450, "0.000")],
@@ -58,7 +69,7 @@ ROWS = [
     # KFintech block: "Market Value on", folio with no suffix, and an opening balance that
     # is NOT zero — its cost was paid before this statement, so it must come back unknown.
     [(40, "Axis Mutual Fund")],
-    [(40, "Folio No: 91234567890"), (220, "PAN: ABCDE1234F")],
+    [(40, "Folio No: 91234567890"), (220, f"PAN: {PAN}")],
     [(40, "128TSDGG-Axis ELSS Tax Saver Fund - Regular Plan - Growth"), (420, "Registrar : KFINTECH")],
     [(40, "ISIN: INF846K01131")],
     [(300, "Opening Unit Balance:"), (450, "500.000")],
@@ -68,7 +79,7 @@ ROWS = [
     [],
     # Fully redeemed — still held units are 0, so it must NOT come back as a holding.
     [(40, "SBI Mutual Fund")],
-    [(40, "Folio No: 55555555"), (220, "PAN: ABCDE1234F")],
+    [(40, "Folio No: 55555555"), (220, f"PAN: {PAN}")],
     [(40, "SBI001-SBI Large Cap Fund - Growth"), (400, "Registrar : CAMS")],
     [(40, "ISIN: INF200K01QV8")],
     [(300, "Opening Unit Balance:"), (450, "0.000")],
