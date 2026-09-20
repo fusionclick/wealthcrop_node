@@ -924,10 +924,11 @@ class StarMFController {
    * gating one of them is the same as gating none.
    *
    * The two gates have different reach, and conflating them is what left a SWP with no
-   * disclaimer at all. SUITABILITY is buy-only on purpose: refusing a sell would trap an
-   * investor in a fund their profile no longer permits. DISCLAIMERS trap nobody — ticking a
-   * box is not a refusal — and ticket 22 names SWP and redemption explicitly, so they run on
-   * every path. `suitability:false` is how a selling path says which of the two it skips.
+   * disclaimer at all. SUITABILITY is buy-only: refusing a sell would trap an investor in a
+   * fund their profile no longer permits. A SWP is not a buy, but ticket 22 names it, and
+   * registering one is a considered act rather than an exit — so it takes the disclaimer
+   * gate alone, via `suitability:false`. A one-off redemption takes neither (see
+   * purchaseNewOrder): it is the exit, and the disclaimer gate fails closed.
    */
   async gateOrder(req, rawScheme, { suitability = true } = {}) {
     const disclaimed = checkDisclaimers(req.body?.data || req.body || {});
@@ -1408,17 +1409,22 @@ class StarMFController {
     if (!limits.ok) {
       return res.status(400).json({ status: "error", message: limits.error });
     }
-    // Tickets 22 and 24. SUITABILITY only on anything that BUYS — gating a sell would trap
-    // an investor in a fund their profile no longer permits. DISCLAIMERS on every type,
-    // redemption included, because ticket 22 names it and a tick-box traps nobody.
+    // Tickets 22 and 24, on anything that BUYS. A one-off redemption is deliberately exempt
+    // from BOTH gates: it is the investor's exit, and it has to work on the worst day. The
+    // suitability gate would trap them in a fund their profile no longer permits, and the
+    // disclaimer gate fails closed — if /disclaimers is unreachable nothing can be ticked,
+    // so gating the sell would mean an outage locks up their money. A SWP is gated instead
+    // (see xspRegister): it is a schedule set up in advance, never an emergency exit, and a
+    // one-off redemption is still there when it cannot be registered.
     //
-    // A switch counts as a buy. It buys into dest_scheme, so that is the scheme to judge —
-    // judging the source, which is being sold, would make type:"sw" the way around the gate.
+    // A switch counts. It buys into dest_scheme, so that is the scheme to judge — judging
+    // the source, which is being sold, would make type:"sw" the way around the whole gate.
     const orderType = String(parsed.order.type || "").toLowerCase();
-    const buys = orderType === "p" || orderType === "sw";
-    const target = buys ? (orderType === "sw" ? await this.lookupScheme(parsed.order.dest_scheme) : scheme) : null;
-    const gate = await this.gateOrder(req, target, { suitability: buys });
-    if (gate) return res.status(403).json(gate);
+    if (orderType === "p" || orderType === "sw") {
+      const target = orderType === "sw" ? await this.lookupScheme(parsed.order.dest_scheme) : scheme;
+      const gate = await this.gateOrder(req, target);
+      if (gate) return res.status(403).json(gate);
+    }
     const mobile = normalizeMobile(parsed.order.mobnum) || investorMobile(req.investor);
     const dp = parsed.order.depository_acct?.dp_id ? parsed.order.depository_acct : await this.lookupDepository(ucc);
     // ponytail: payload wahi jo order 5001433387 par chala tha — scheme code jaisa

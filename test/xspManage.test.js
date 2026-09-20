@@ -357,3 +357,60 @@ describe("modify keeps a SIP running instead of refusing it", () => {
   });
 });
 
+
+// ── ticket 22: the SWP takes the disclaimer gate, the exit does not ───────────────────
+
+describe("ticket 22: registering a SWP requires the acknowledgement", () => {
+  // A SWP is not a buy, so ticket 24's suitability gate stays off it — an investor whose
+  // profile no longer fits the fund must still be able to schedule their way out. But it
+  // IS a considered act set up in advance, so ticket 22 applies, and the one-off redemption
+  // remains available if /disclaimers is down.
+  const swp = (over = {}, dataOver = {}) => ({
+    ucc: "UCC-A",
+    investor: { email: "a@example.com", kyc: {}, riskProfile: null },
+    body: {
+      data: {
+        sxp_type: "swp",
+        scheme: "PP001ZG-GR",
+        folio: "F123",
+        amount: 2000,
+        freq: "m",
+        txn_date: 10,
+        start_date: "2026-11-10",
+        end_date: "2027-11-10",
+        acknowledged: ["market_risk", "past_performance"],
+        ...over,
+      },
+      ...dataOver,
+    },
+  });
+
+  let sent;
+  beforeEach(() => {
+    sent = [];
+    controller.unitsHeld = async () => 900;
+    controller.callTrxn = async (method, reqObj) => {
+      sent.push({ method, reqObj });
+      return { status: "success", data: { sxp_id: "SWP-1" } };
+    };
+  });
+
+  it("refuses an unacknowledged SWP before BSE is called", async () => {
+    const res = fakeRes();
+    await controller.xspRegister(swp({ acknowledged: undefined }), res);
+    assert.equal(res.out.code, 403);
+    assert.equal(res.out.body.code, "disclaimer_not_acknowledged");
+    assert.equal(sent.some((c) => c.method === "xspRegister"), false, "BSE was called anyway");
+  });
+
+  it("lets an acknowledged SWP past both gates with no risk profile at all", async () => {
+    // Proves the split: the disclaimer gate ran and was satisfied, the suitability gate
+    // never ran — riskProfile is null, which refuses a purchase outright (ticket 24).
+    // Only the gate verdict is asserted: what happens after it is BSE's leg, and this
+    // suite has no BSE to reach.
+    const res = fakeRes();
+    await controller.xspRegister(swp(), res);
+    assert.notEqual(res.out.code, 403, "an acknowledged SWP must not be refused by a gate");
+    assert.notEqual(res.out.body?.code, "disclaimer_not_acknowledged");
+  });
+});

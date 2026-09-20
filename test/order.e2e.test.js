@@ -447,14 +447,14 @@ describe("order path end to end", () => {
     investorResponse = okInvestor();
   });
 
-  it("ticket 22: the disclaimer gate DOES apply to a redemption", async () => {
-    // Ticking a box traps nobody, and ticket 22 names redemption and SWP explicitly — so
-    // the exemption that keeps suitability off a sell must not carry the disclaimer with it.
+  it("ticket 22: neither gate applies to a one-off redemption, even unacknowledged", async () => {
+    // The exit has to work on the worst day. The disclaimer gate fails closed, so applying
+    // it here would mean a /disclaimers outage locks the investor out of their own money.
+    // The SWP carries ticket 22 instead — see the xspRegister suite.
     sent = null;
     const r = await post("/purchaseNewOrder", sell({}, { acknowledged: undefined }));
-    assert.equal(r.status, 403);
-    assert.equal(r.body.code, "disclaimer_not_acknowledged");
-    assert.equal(sent, null, "BSE was called for an unacknowledged redemption");
+    assert.equal(r.status, 200);
+    assert.ok(sent, "an unacknowledged redemption must still reach BSE");
   });
 
   it("ticket 22: the disclaimer text is served for the checkout screens", async () => {
