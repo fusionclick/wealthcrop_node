@@ -22,9 +22,17 @@ from reportlab.pdfgen import canvas
 #
 #   CAS_PAN=XXXXX0000X CAS_OUT=/tmp/mine.pdf python test/fixtures/make-cas.py
 #
-# A real CAS uses the PAN as its own password, and so does this one.
+# CAS_PAN=none omits the PAN from the statement entirely. The guard is
+# `mine && parsed.pan && mine !== parsed.pan`, so a statement carrying no PAN imports on
+# ANY account — which is what a shared QA fixture wants, because otherwise every tester
+# needs their own build of it and the 403 gets reported as a broken import instead.
+#
+# A real CAS uses the PAN as its own password, and so does this one unless CAS_PASSWORD says
+# otherwise (it has to, when there is no PAN to use).
 PAN = os.environ.get("CAS_PAN", "ABCDE1234F").strip().upper()
-PASSWORD = PAN
+if PAN == "NONE":
+    PAN = ""
+PASSWORD = os.environ.get("CAS_PASSWORD") or PAN or "ABCDE1234F"
 OUT = os.environ.get("CAS_OUT") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "cas-sample.pdf"
 )
@@ -88,6 +96,12 @@ ROWS = [
     [(300, "Closing Unit Balance:"), (430, "0.000"), (480, "NAV on 31-Mar-2025: INR 115.0000")],
     [(300, "Valuation on 31-Mar-2025: INR 0.00")],
 ]
+
+
+# CAS_PAN=none leaves f"PAN: {PAN}" as the bare string "PAN: ", so drop those cells. Matched
+# exactly, because row 1 also carries "PAN: OK" — a verification flag, not an identifier.
+if not PAN:
+    ROWS = [[cell for cell in row if cell[1].strip() != "PAN:"] for row in ROWS]
 
 
 def build() -> bytes:
