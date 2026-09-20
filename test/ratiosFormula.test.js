@@ -91,3 +91,70 @@ describe("advanced ratio formulas", () => {
     assert.deepEqual(ratiosFromSeries(short), {});
   });
 });
+
+// ── Value at Risk (SRS p.11) ──────────────────────────────────────────────────────────
+
+const { sectorsFromHoldings } = require("../src/mf/scheme");
+
+describe("VaR", () => {
+  it("is the 5th-percentile day, negative like maxDrawdown", () => {
+    // Alternating +/-1%: every loss day is exactly -1%, so the 5th percentile IS -1%.
+    const r = ratiosFromSeries(alternating());
+    assert.equal(r.var95, -1, "when every down day is -1%, the worst 5% are too");
+    assert.ok(r.var95 < 0, "a loss is reported negative, matching maxDrawdown's sign");
+  });
+
+  it("reports the tail, not the average — one crash does not move the mean much", () => {
+    // 251 flat days and a single -30% day. Mean is near zero; the tail is not.
+    const rows = [{ timestamp: 0, nav: 100 }];
+    for (let i = 1; i <= 252; i++) {
+      rows.push({ timestamp: 86400 * i, nav: i === 200 ? rows[i - 1].nav * 0.7 : rows[i - 1].nav });
+    }
+    const r = ratiosFromSeries(rows);
+    // With 251 zero-days, the 5th percentile is still 0 — one bad day in 252 is under 5%.
+    assert.equal(r.var95, 0, "a single crash is rarer than 1-in-20, so it sits outside the 95% tail");
+    assert.equal(r.maxDrawdown, -30, "maxDrawdown still catches it — the two measure different things");
+  });
+
+  it("a fund that only ever rises has a non-negative VaR", () => {
+    const rows = [{ timestamp: 0, nav: 100 }];
+    for (let i = 1; i <= 252; i++) rows.push({ timestamp: 86400 * i, nav: rows[i - 1].nav * 1.001 });
+    const r = ratiosFromSeries(rows);
+    assert.ok(r.var95 >= 0, "no losing day means no loss to report");
+  });
+
+  it("is absent, never zero, when there is not enough history to measure it", () => {
+    assert.equal(ratiosFromSeries([{ timestamp: 0, nav: 100 }]).var95, undefined);
+  });
+});
+
+// ── Sector rollup (SRS p.11) ──────────────────────────────────────────────────────────
+
+describe("sector breakdown from holdings", () => {
+  it("sums holdings by sector, largest first", () => {
+    const out = sectorsFromHoldings([
+      { name: "HDFC Bank", sector: "Financials", pct: 8 },
+      { name: "Infosys", sector: "IT", pct: 6 },
+      { name: "ICICI Bank", sector: "Financials", pct: 5 },
+      { name: "TCS", sector: "IT", pct: 4 },
+    ]);
+    assert.deepEqual(out, [
+      { name: "Financials", pct: 13 },
+      { name: "IT", pct: 10 },
+    ]);
+  });
+
+  it("leaves unclassified holdings out rather than inventing an 'Other' sector", () => {
+    const out = sectorsFromHoldings([
+      { name: "HDFC Bank", sector: "Financials", pct: 8 },
+      { name: "Cash", sector: "", pct: 3 },
+      { name: "Mystery", pct: 2 },
+    ]);
+    assert.deepEqual(out, [{ name: "Financials", pct: 8 }]);
+  });
+
+  it("no holdings, no sectors — never a chart with one empty slice", () => {
+    assert.deepEqual(sectorsFromHoldings([]), []);
+    assert.deepEqual(sectorsFromHoldings(), []);
+  });
+});

@@ -640,11 +640,38 @@ function rankInPeers(mine, peers = [], key) {
  * shape adapter between the two — the fund page hides each section when its array is empty,
  * so a scheme with no uploaded portfolio behaves exactly as it did before.
  */
+/**
+ * Roll a holdings list up by sector.
+ *
+ * Only for disclosures that list a sector against each holding but no pre-aggregated
+ * sector table — which is most of them, because the AMC's own factsheet draws that donut
+ * itself and the underlying file just has the column. Without this the sector chart stayed
+ * empty on a fund whose sector data was sitting right there in `holdings`.
+ *
+ * Holdings with no sector are left out rather than bucketed as "Other": an unclassified
+ * slice is not a sector, and one grey wedge labelled Other is worse than a shorter donut.
+ */
+function sectorsFromHoldings(holdings = []) {
+  const by = new Map();
+  for (const h of holdings) {
+    const name = String(h?.sector || "").trim();
+    const pct = Number(h?.pct) || 0;
+    if (!name || pct <= 0) continue;
+    by.set(name, (by.get(name) || 0) + pct);
+  }
+  return [...by.entries()]
+    .map(([name, pct]) => ({ name, pct: parseFloat(pct.toFixed(2)) }))
+    .sort((a, b) => b.pct - a.pct);
+}
+
 function fundProfile(uploaded = null) {
+  const holdings = uploaded?.holdings || [];
+  const sectors = uploaded?.sectors || [];
   return {
-    holdings: uploaded?.holdings || [],
+    holdings,
     assetSplit: uploaded?.assetSplit || [],
-    sectors: uploaded?.sectors || [],
+    // The AMC's own table wins when it sent one; otherwise roll it up from the holdings.
+    sectors: sectors.length ? sectors : sectorsFromHoldings(holdings),
     holdingsAsOf: uploaded?.asOf || null,
     aumLabel: null,
   };
@@ -703,6 +730,18 @@ function ratiosFromSeries(sorted = []) {
     if (peak > 0) maxDd = Math.min(maxDd, p.nav / peak - 1);
   }
 
+  // Value at Risk — the one-day loss this fund exceeded on its worst 5% of days.
+  //
+  // Historical, not parametric: the 5th percentile of the days that actually happened,
+  // rather than 1.645 standard deviations off a normal curve. NAV returns are fat-tailed
+  // and skewed, so the normal assumption understates exactly the tail VaR exists to
+  // describe. With a year of data the 5th percentile is a real observed day.
+  //
+  // Negative, like maxDrawdown — both are losses, and one sign convention across the card.
+  const ordered = [...slice].sort((a, b) => a - b);
+  const idx = Math.max(0, Math.floor(0.05 * ordered.length) - 1);
+  const var95 = ordered.length ? ordered[idx] : null;
+
   const r2 = (v) => parseFloat(v.toFixed(2));
   return {
     peRatio: null,
@@ -711,6 +750,7 @@ function ratiosFromSeries(sorted = []) {
     sharpe: vol ? r2((ann - RISK_FREE) / vol) : null,
     sortino: downside ? r2((ann - RISK_FREE) / downside) : null,
     maxDrawdown: maxDd ? r2(maxDd * 100) : null,
+    var95: var95 == null ? null : r2(var95 * 100),
     riskFreeRate: r2(RISK_FREE * 100),
     window: slice.length,
   };
@@ -885,6 +925,7 @@ module.exports = {
   avgReturns,
   rankInPeers,
   fundProfile,
+  sectorsFromHoldings,
   ratiosFromSeries,
   parseListQuery,
   matchesCategory,
