@@ -29,6 +29,7 @@ const {
 } = require("../mf/xsp");
 const { checkSuitability, checkDisclaimers, DISCLAIMERS, REQUIRED_ACKS } = require("../mf/suitability");
 const { getRiskPolicy } = require("../mf/riskPolicy");
+const { checkApproval } = require("../mf/approval");
 const { getHoldings } = require("../mf/holdings");
 const { mapBseErrors } = require("../mf/bseFieldErrors");
 const orderRequestData = require("../requestData/orderRequestData");
@@ -930,10 +931,18 @@ class StarMFController {
    * gate alone, via `suitability:false`. A one-off redemption takes neither (see
    * purchaseNewOrder): it is the exit, and the disclaimer gate fails closed.
    */
-  async gateOrder(req, rawScheme, { suitability = true } = {}) {
+  async gateOrder(req, rawScheme, { suitability = true, approval = null } = {}) {
     const disclaimed = checkDisclaimers(req.body?.data || req.body || {});
     if (!disclaimed.ok) {
       return { status: "error", code: disclaimed.code, message: disclaimed.message, required: disclaimed.required };
+    }
+    // SRS §4 — a transaction at or above the configured amount is held for authorisation.
+    // It belongs in this gate, not on Laravel's order row: that row is written after BSE
+    // already has the order, so nothing reading it could stop one. Skipped entirely when
+    // the caller passes no intent, and costs nothing when the threshold is 0 (the default).
+    if (approval) {
+      const held = await checkApproval(req, approval);
+      if (held) return held;
     }
     if (!suitability) return null;
     // lookupScheme hands back BSE's raw master row, which carries a category but no SEBI
@@ -1114,7 +1123,20 @@ class StarMFController {
     // redemption does, but still takes the disclaimer gate (ticket 22 names it).
     const sells = type === "swp";
     const target = sells ? null : await this.lookupScheme(type === "stp" ? input.dest_scheme : scheme);
-    const gate = await this.gateOrder(req, target, { suitability: !sells });
+    // SRS §4 — judged on the INSTALMENT, which is the amount that actually moves each
+    // time. A ₹5,000 SIP is not a large transaction because it will run for ten years.
+    // A SWP only sells, so it is never held: an exit must work on the worst day.
+    const gate = await this.gateOrder(req, target, {
+      suitability: !sells,
+      approval: sells
+        ? null
+        : {
+            kind: type,
+            scheme_code: String(type === "stp" ? input.dest_scheme : scheme),
+            scheme_name: mapScheme(target || {})?.scheme_name || "",
+            amount: Number(input.amount) || 0,
+          },
+    });
     if (gate) return res.status(403).json(gate);
 
     const kyc = req.investor?.kyc || {};
@@ -1422,7 +1444,16 @@ class StarMFController {
     const orderType = String(parsed.order.type || "").toLowerCase();
     if (orderType === "p" || orderType === "sw") {
       const target = orderType === "sw" ? await this.lookupScheme(parsed.order.dest_scheme) : scheme;
-      const gate = await this.gateOrder(req, target);
+      // SRS §4 — the amount that would leave the investor's bank is what a threshold is
+      // about, so it is judged on the order's own amount, against the scheme being bought.
+      const gate = await this.gateOrder(req, target, {
+        approval: {
+          kind: orderType === "sw" ? "switch" : "purchase",
+          scheme_code: String(orderType === "sw" ? parsed.order.dest_scheme : parsed.order.scheme || ""),
+          scheme_name: mapScheme(target || {})?.scheme_name || "",
+          amount: Number(parsed.order.amount) || 0,
+        },
+      });
       if (gate) return res.status(403).json(gate);
     }
     const mobile = normalizeMobile(parsed.order.mobnum) || investorMobile(req.investor);
