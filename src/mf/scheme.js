@@ -242,6 +242,14 @@ function lockInOf(scheme = {}) {
   };
 }
 
+// Same shape as lockInOf, built from a plain number of years (the enrichment feed's unit).
+// Only used when BSE published nothing, so a 0 here still means "no lock-in", not "unknown".
+function lockInFromYears(years) {
+  const n = Number(years);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return { period: n, type: "year", label: `${n} year${n === 1 ? "" : "s"}` };
+}
+
 // "IDCW Payout" / "IDCW Reinvestment" / "Growth" — BSE's own scheme_option, normalised so
 // the UI can badge it without every page re-inventing the spelling.
 function payoutOf(scheme = {}) {
@@ -908,6 +916,7 @@ module.exports = {
   schemeTransactions,
   txnSummary,
   lockInOf,
+  lockInFromYears,
   payoutOf,
   returnsBoth,
   rollingReturns,

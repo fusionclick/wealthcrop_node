@@ -116,6 +116,12 @@ function shape(row = {}) {
       : [],
     objective: str(row.investment_objective),
     factsheetUrl: str(row.detail_info),
+    // Lock-in, in years. BSE publishes `scheme_lockin_period` but it is empty on the host we
+    // are pointed at — the same hole `scheme_benchmark` has — so an ELSS, which is locked for
+    // three years BY LAW, was showing no lock-in at all. Kuvera carries it, and 0 means
+    // "no lock-in" (checked: PPFAS Flexi Cap 0, Axis ELSS 3), so only a positive value is a
+    // period. BSE's own field still wins in `mapScheme`; this is the fallback.
+    lockInYears: Number(row.lock_in_period) > 0 ? Number(row.lock_in_period) : null,
     expense: str(row.expense_ratio),
     expenseAsOf: str(row.expense_ratio_date),
     // "Plan inception", not "fund inception": for a scheme that predates 2013 the direct

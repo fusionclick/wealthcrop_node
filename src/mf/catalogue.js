@@ -451,4 +451,67 @@ function schemeCategories() {
   return out;
 }
 
-module.exports = { getCatalogue, query, warmCatalogue, schemeCategories, AMFI_FALLBACK };
+/**
+ * Category average + rank for one scheme, computed off the in-memory index.
+ *
+ * The previous implementation searched mfapi for five same-name peers and downloaded a full
+ * NAV history for each, sequentially — five history fetches inside a page request, which is
+ * what made `/scheme-details` time out at nginx and why both rows have been reading "NA" on
+ * every fund since. The index already holds trailing returns for every enriched scheme, so
+ * the whole category is available here for free, and a rank out of 400 peers says far more
+ * than a rank out of six search hits.
+ *
+ * Measured against the scheme's OWN index row, never the detail page's mfapi figure: the two
+ * feeds cut their windows on different days, so ranking one against the other would move a
+ * fund a few places for a reason that has nothing to do with performance. The page labels
+ * these as category figures; `peers` goes out with them so it can say out of how many.
+ *
+ * Returns nulls (never a fabricated 0) when the index is cold or the category is too thin to
+ * mean anything — one fund is not a category, and "Rank 1 of 1" reads as a win.
+ */
+const RANK_PERIODS = ["1Y", "3Y", "5Y", "inception"];
+const MIN_PEERS = 5;
+
+function categoryRanking(scheme = {}, list = master.list) {
+  const empty = { categoryAvg: {}, rank: {}, peers: 0, categoryLabel: null };
+  const label = scheme.subType || scheme.category;
+  if (!label || !list.length) return empty;
+
+  const key = String(label).trim().toLowerCase();
+  const peers = list.filter((f) => String(f.subType || f.category || "").trim().toLowerCase() === key);
+  if (peers.length < MIN_PEERS) return empty;
+
+  // The scheme's own row out of the index, so it is measured on the same feed as its peers.
+  const code = String(scheme.scheme_bse_code || "").trim().toUpperCase();
+  const isin = String(scheme.scheme_isin || "").trim().toUpperCase();
+  const self = peers.find(
+    (f) =>
+      (code && String(f.scheme_bse_code || "").trim().toUpperCase() === code) ||
+      (isin && String(f.scheme_isin || "").trim().toUpperCase() === isin),
+  );
+
+  const categoryAvg = {};
+  const rank = {};
+  const out = {};
+  for (const period of RANK_PERIODS) {
+    const values = peers.map((f) => f.returns?.[period]).filter((v) => Number.isFinite(v));
+    // A period only a handful of funds in the category have (5Y on a young category) is not
+    // an average, it is a coincidence.
+    if (values.length < MIN_PEERS) continue;
+    categoryAvg[period] = parseFloat((values.reduce((a, b) => a + b, 0) / values.length).toFixed(2));
+
+    const mine = self?.returns?.[period];
+    if (!Number.isFinite(mine)) continue;
+    // Ties share the better position, the way a league table does.
+    rank[period] = values.filter((v) => v > mine).length + 1;
+    out[period] = values.length;
+  }
+
+  // The UI's fourth column is "Since inception" and calls it ALL.
+  if (categoryAvg.inception != null) categoryAvg.ALL = categoryAvg.inception;
+  if (rank.inception != null) rank.ALL = rank.inception;
+
+  return { categoryAvg, rank, peers: peers.length, rankedOf: out, categoryLabel: label };
+}
+
+module.exports = { getCatalogue, query, warmCatalogue, schemeCategories, categoryRanking, AMFI_FALLBACK };

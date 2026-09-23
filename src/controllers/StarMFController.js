@@ -2,12 +2,12 @@ const { configData, IS_BSE_DEMO } = require("../config");
 const axios = require("axios");
 const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
-const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache, schemeTransactions, returnsBoth, rollingReturns, alphaBeta } = require("../mf/scheme");
+const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache, schemeTransactions, returnsBoth, rollingReturns, alphaBeta, lockInFromYears } = require("../mf/scheme");
 const { getEnrichment } = require("../mf/kuvera");
 const { benchmarkSeries, benchmarkFor } = require("../mf/benchmark");
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor, navLooksPlausible } = require("../mf/navStore");
-const { getCatalogue, schemeCategories, AMFI_FALLBACK } = require("../mf/catalogue");
+const { getCatalogue, schemeCategories, categoryRanking, AMFI_FALLBACK } = require("../mf/catalogue");
 const { getHidden, isHidden } = require("../mf/hidden");
 const { getAmfiNavs } = require("../mf/amfiNav");
 const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE } = require("../mf/order");
@@ -2000,9 +2000,10 @@ class StarMFController {
       // exactly as before.
       const profile = fundProfile(await getHoldings(mapped.scheme_isin, mapped.scheme_bse_code || scheme_code));
       const ratios = ratiosFromSeries(mf?.series || []);
-      // ponytail: skip peer NAV fan-out — nginx times out scheme-details
-      const categoryAvg = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
-      const rank = { "1Y": null, "3Y": null, "5Y": null, ALL: null };
+      // Category average + rank, read off the in-memory master index. No network: the peer
+      // NAV fan-out this replaces is what used to time out at nginx, which is why both rows
+      // had been reading "NA" on every fund.
+      const { categoryAvg, rank, peers: categoryPeers, categoryLabel } = categoryRanking(mapped);
 
       const series = mf?.series || [];
       // Both forms of every period (Absolute / CAGR toggle) and the rolling-return
@@ -2074,6 +2075,9 @@ class StarMFController {
             aum: extra.aum ?? null,
             aumUnit: extra.aumUnit ?? null,
             expense: mapped.expense || extra.expense || null,
+            // BSE's own lock-in wins; its column is empty on this host, which is why an ELSS
+            // (locked three years by law) was showing none at all. Kuvera's value is in years.
+            lockIn: mapped.lockIn || lockInFromYears(extra.lockInYears),
             // "Plan inception": for a scheme older than 2013 the direct plan genuinely
             // starts 2013-01-01, so this is the plan's birthday, not the fund's.
             inceptionDate: extra.inceptionDate || periodReturns.inceptionDate || null,
@@ -2094,6 +2098,10 @@ class StarMFController {
           holdingsAsOf: profile.holdingsAsOf,
           categoryAvg,
           rank,
+          // How many schemes the rank is out of, so the page can say "3 of 412" instead of a
+          // bare number that could be out of anything.
+          categoryPeers,
+          categoryLabel,
         }
       });
 
