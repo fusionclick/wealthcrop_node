@@ -2003,7 +2003,7 @@ class StarMFController {
       // Category average + rank, read off the in-memory master index. No network: the peer
       // NAV fan-out this replaces is what used to time out at nginx, which is why both rows
       // had been reading "NA" on every fund.
-      const { categoryAvg, rank, peers: categoryPeers, categoryLabel } = categoryRanking(mapped);
+      const { categoryAvg, rank, peers: categoryPeers, rankedOf, categoryLabel } = categoryRanking(mapped);
 
       const series = mf?.series || [];
       // Both forms of every period (Absolute / CAGR toggle) and the rolling-return
@@ -2098,9 +2098,13 @@ class StarMFController {
           holdingsAsOf: profile.holdingsAsOf,
           categoryAvg,
           rank,
-          // How many schemes the rank is out of, so the page can say "3 of 412" instead of a
-          // bare number that could be out of anything.
           categoryPeers,
+          // How many schemes each rank was actually drawn from — NOT the size of the category.
+          // The enrichment cache is empty for the first hour after a container restart, so a
+          // category of 162 can have six funds with a 3Y figure in it; printing "rank 1 of
+          // 162" then would be a flattering lie that heals itself an hour later, which is the
+          // worst kind. The page prints this denominator beside every rank.
+          rankedOf,
           categoryLabel,
         }
       });

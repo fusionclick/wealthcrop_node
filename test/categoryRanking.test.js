@@ -81,3 +81,18 @@ test("no category on the scheme means no claim about it", () => {
   assert.strictEqual(r.peers, 0);
   assert.deepStrictEqual(r.categoryAvg, {});
 });
+
+test("every rank reports the count it was drawn from, not the category size", () => {
+  // The category has six funds but only two report 5Y. If the page printed "rank 1 of 6"
+  // from the category size it would be flattering and wrong — and wrong only for the first
+  // hour after a restart, which is the hardest kind of wrong to catch.
+  const r = categoryRanking(INDEX[0], INDEX);
+  assert.strictEqual(r.rankedOf["1Y"], 6, "all six report 1Y");
+  assert.strictEqual(r.rankedOf["5Y"], undefined, "5Y was not ranked, so it has no count");
+  assert.strictEqual(r.rankedOf.ALL, r.rankedOf.inception, "the page reads ALL");
+  // The count can never exceed the category, nor claim more than it ranked.
+  for (const k of Object.keys(r.rank)) {
+    assert.ok(r.rankedOf[k] >= r.rank[k], `rank ${k} is out of fewer funds than its position`);
+    assert.ok(r.rankedOf[k] <= r.peers, `rank ${k} claims more funds than the category holds`);
+  }
+});

@@ -510,6 +510,7 @@ function categoryRanking(scheme = {}, list = master.list) {
   // The UI's fourth column is "Since inception" and calls it ALL.
   if (categoryAvg.inception != null) categoryAvg.ALL = categoryAvg.inception;
   if (rank.inception != null) rank.ALL = rank.inception;
+  if (out.inception != null) out.ALL = out.inception;
 
   return { categoryAvg, rank, peers: peers.length, rankedOf: out, categoryLabel: label };
 }
