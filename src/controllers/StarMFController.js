@@ -39,6 +39,7 @@ const COMMISSION_VERSION = process.env.COMMISSION_STRUCTURE_VERSION || "2026.09"
 const COMMISSION_URL = String(process.env.COMMISSION_STRUCTURE_URL || "").trim();
 const { memDetails, assertEuinSane } = require("../mf/euin");
 const { recordConsents } = require("../mf/consent");
+const { getDistributor } = require("../mf/distributor");
 const { getRiskPolicy } = require("../mf/riskPolicy");
 const { checkApproval } = require("../mf/approval");
 const { getHoldings } = require("../mf/holdings");
@@ -1021,28 +1022,38 @@ class StarMFController {
    * it because the eight-year audit trail records the version an investor agreed to, and the
    * two must come from the same response or they can drift.
    */
-  disclaimers = async (_req, res) =>
-    res.json({
+  disclaimers = async (_req, res) => {
+    // Identity and the commission link come from the admin panel, so the ARN can be
+    // corrected without a deploy and is the same value the order payload carries.
+    const dist = await getDistributor();
+    // The scheme_documents / regular_plan wording names the legal entity, so it has to track
+    // whatever the panel says rather than the env value this process booted with.
+    const disclaimers = { ...DISCLAIMERS };
+    if (dist.legal_entity && dist.legal_entity !== LEGAL_ENTITY) {
+      disclaimers.execution_only = DISCLAIMERS.execution_only.split(LEGAL_ENTITY).join(dist.legal_entity);
+    }
+    return res.json({
       status: "success",
       data: {
-        disclaimers: DISCLAIMERS,
+        disclaimers,
         required: REQUIRED_ACKS,
         consent_text_version: CONSENT_TEXT_VERSION,
         // §1.A.1 — the mandatory branding line. Sent rather than hardcoded in the bundle so
         // an ARN change does not need a frontend deploy, and so one wrong value cannot be
-        // right on one screen and stale on another.
+        // right on one screen and stale on another. A blank `line` means "not configured",
+        // and the frontend then renders nothing rather than "ARN: ".
         distributor: {
-          legal_entity: LEGAL_ENTITY,
-          arn: DISTRIBUTOR_ARN,
-          line: DISTRIBUTOR_ARN
-            ? `${LEGAL_ENTITY} | AMFI-registered Mutual Fund Distributor | ARN: ${DISTRIBUTOR_ARN}`
-            : "",
+          legal_entity: dist.legal_entity,
+          arn: dist.arn,
+          line: dist.line,
         },
-        // §1.B — the commission structure must be a FUNCTIONAL hyperlink at checkout.
-        commission_url: COMMISSION_URL,
-        commission_structure_version: COMMISSION_VERSION,
+        // §1.B — the commission structure must be a FUNCTIONAL hyperlink at checkout, so it
+        // is only offered once something is actually published behind it.
+        commission_url: dist.commission_url || COMMISSION_URL,
+        commission_structure_version: dist.commission_version || COMMISSION_VERSION,
       },
     });
+  };
 
   /**
    * Ticket 16 — read a CAMS/KFintech CAS and return the holdings in it.

@@ -24,8 +24,14 @@
 
 // The distributor's own ARN. Never a literal in a payload builder — a wrong ARN in a live
 // order is a misattributed commission, and the one that used to be hardcoded was not ours.
-const ARN = String(process.env.DISTRIBUTOR_ARN || "").trim();
-const SUB_BROKER_CODE = String(process.env.DISTRIBUTOR_SUB_BROKER_CODE || "").trim();
+//
+// Read from the admin panel via the cached distributor settings, with env as the seed, so
+// the ARN printed on the footer and the ARN sent to BSE are the same value by construction
+// rather than by two people remembering to change two places.
+const { cachedDistributor } = require("./distributor");
+
+const ARN = () => cachedDistributor().arn || "";
+const SUB_BROKER_CODE = () => cachedDistributor().sub_br_code || "";
 
 // BSE spells the declaration `euin_flag` on this API; the spec calls it EUINDecl. Same field.
 const EXECUTION_ONLY = { euin: "", euin_flag: true };
@@ -55,8 +61,8 @@ function memDetails({ euin = "", omitEmpty = true } = {}) {
     // Exactly one of these two shapes is ever produced, by construction rather than by
     // discipline: there is no code path that sets both.
     ...(advised ? { euin: advised, euin_flag: false } : EXECUTION_ONLY),
-    sub_br_code: SUB_BROKER_CODE,
-    sub_br_arn: ARN,
+    sub_br_code: SUB_BROKER_CODE(),
+    sub_br_arn: ARN(),
     partner_id: "",
   };
   if (!omitEmpty) return block;
