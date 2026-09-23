@@ -117,6 +117,14 @@ function checkSuitability(investor, scheme = {}, policy = null) {
  * ponytail: a constant with an env override, not a table. The text changes once a year at
  * most and nothing queries it.
  */
+/**
+ * The distributor's own identity, as AMFI requires it to appear. Every one of these is an
+ * env value rather than a literal: a wrong ARN on a screen is a misrepresentation, and the
+ * ARN that used to be hardcoded in this codebase belonged to somebody else.
+ */
+const LEGAL_ENTITY = process.env.LEGAL_ENTITY_NAME || "Wealthcrop Advisory Pvt Ltd";
+const DISTRIBUTOR_ARN = String(process.env.DISTRIBUTOR_ARN || "").trim();
+
 const DISCLAIMERS = {
   market_risk:
     process.env.DISCLAIMER_MARKET_RISK ||
@@ -130,10 +138,53 @@ const DISCLAIMERS = {
   nav_cutoff:
     process.env.DISCLAIMER_NAV_CUTOFF ||
     "Units are allotted at the NAV applicable once funds are realised, which may differ from the NAV shown here.",
+
+  // ── AMFI/SEBI compliance spec §1.B and §2 ────────────────────────────────────────────
+  // These three are the consent matrix, not general notices: each one is a statement the
+  // investor makes, and each is written to the eight-year consent log with the order id.
+
+  // §2 row 1. AMFI publishes this wording; the placeholder is filled from the legal entity
+  // name so a rename cannot leave the declaration naming a company that no longer exists.
+  execution_only:
+    process.env.DISCLAIMER_EXECUTION_ONLY ||
+    `I/We hereby confirm that this is an 'execution-only' transaction executed without any interaction or advice by the employee/sales person of ${LEGAL_ENTITY} or notwithstanding the advice of inappropriateness, if any, provided by ${LEGAL_ENTITY}.`,
+
+  // §1.A.2 + §2 row 3. The commission disclosure is the reason this platform is paid; an
+  // investor agreeing to a Regular Plan has to be told that before the money moves.
+  regular_plan_commission:
+    process.env.DISCLAIMER_REGULAR_PLAN ||
+    "All mutual fund transactions offered on this platform are under Regular Plans, which involve the payment of trail commission to us as an AMFI-registered Mutual Fund Distributor.",
+
+  // §2 row 4. The links themselves are per scheme and come from the scheme payload; this is
+  // the sentence the tick is against.
+  scheme_documents:
+    process.env.DISCLAIMER_SCHEME_DOCUMENTS ||
+    "I/We confirm that I/We have read and understood the Scheme Information Document (SID), Statement of Additional Information (SAI) and Key Information Memorandum (KIM) of the scheme(s) selected.",
+
+  // §1.B "No Guarantees Warning", in AMFI's own words. `past_performance` above says half of
+  // this and is kept because orders already reference it; this is the full statement shown
+  // at checkout.
+  no_guarantee:
+    process.env.DISCLAIMER_NO_GUARANTEE ||
+    "Mutual funds do not offer assured or guaranteed returns. Past performance of any scheme or asset class is not indicative of future results.",
 };
 
-// The ones an investor must tick before an order is placed. The rest are shown, not signed.
-const REQUIRED_ACKS = ["market_risk", "past_performance"];
+/**
+ * The ones an investor must tick before an order is placed. The rest are shown, not signed.
+ *
+ * Adding to this list is a breaking change for every checkout screen, which is the point:
+ * the server refuses an order whose payload does not carry every key here, so a screen that
+ * forgets to render one cannot quietly place orders without it. That is what makes this a
+ * gate rather than a notice.
+ */
+const REQUIRED_ACKS = [
+  "market_risk",
+  "past_performance",
+  // §2 rows 1, 3 and 4 of the consent matrix.
+  "execution_only",
+  "regular_plan_commission",
+  "scheme_documents",
+];
 
 /**
  * @returns {{ok: true} | {ok: false, code, message, required: string[]}}
@@ -168,4 +219,6 @@ module.exports = {
   DISCLAIMERS,
   REQUIRED_ACKS,
   RISK_POLICY,
+  LEGAL_ENTITY,
+  DISTRIBUTOR_ARN,
 };

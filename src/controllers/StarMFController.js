@@ -27,7 +27,18 @@ const {
   validateTopup,
   mergeSipChanges,
 } = require("../mf/xsp");
-const { checkSuitability, checkDisclaimers, DISCLAIMERS, REQUIRED_ACKS } = require("../mf/suitability");
+const { checkSuitability, checkDisclaimers, DISCLAIMERS, REQUIRED_ACKS, LEGAL_ENTITY, DISTRIBUTOR_ARN } = require("../mf/suitability");
+
+// AMFI compliance spec §1.B and §2. The version is what the consent log stores, so it is
+// declared once here and travels with the text to the browser; bump it whenever the wording
+// of anything in REQUIRED_ACKS changes, and never reuse a version.
+const CONSENT_TEXT_VERSION = process.env.CONSENT_TEXT_VERSION || "2026.09";
+const COMMISSION_VERSION = process.env.COMMISSION_STRUCTURE_VERSION || "2026.09";
+// An empty URL renders no link rather than a dead one: a broken commission link is worse
+// than a missing one, because it looks like disclosure and is not.
+const COMMISSION_URL = String(process.env.COMMISSION_STRUCTURE_URL || "").trim();
+const { memDetails, assertEuinSane } = require("../mf/euin");
+const { recordConsents } = require("../mf/consent");
 const { getRiskPolicy } = require("../mf/riskPolicy");
 const { checkApproval } = require("../mf/approval");
 const { getHoldings } = require("../mf/holdings");
@@ -969,12 +980,69 @@ class StarMFController {
     if (!suitable.ok) {
       return { status: "error", code: suitable.code, message: suitable.message };
     }
+    await this.logConsents(req, approval, scheme);
     return null;
   }
 
-  /** The disclaimer text the checkout screens render, and which of them must be ticked. */
+  /**
+   * §2 — write the consent trail for an order that has just cleared every gate.
+   *
+   * Deliberately the LAST thing gateOrder does: a refused order has no consent to record,
+   * because nothing was placed. Awaited rather than fired and forgotten, so a slow Laravel
+   * shows up as a slow checkout instead of as silently missing audit rows.
+   *
+   * The EUIN pair written here comes from the same memDetails() that builds the outgoing
+   * payload, not from a copy of it — so the audit trail cannot describe a declaration
+   * different from the one the exchange received.
+   */
+  async logConsents(req, approval, scheme) {
+    const body = req.body?.data || req.body || {};
+    const orderId = String(body.mem_ord_ref_id || body.mem_sxp_ref_id || "").slice(0, 64) || null;
+    const schemeCode = String(approval?.scheme_code || scheme?.scheme_bse_code || "").trim();
+    const sent = memDetails();
+
+    await recordConsents(req, [
+      {
+        type: "execution_only",
+        order_id: orderId,
+        euin_number: sent.euin || null,
+        euin_declared: sent.euin_flag === true,
+      },
+      { type: "regular_plan_commission", order_id: orderId, commission_version: COMMISSION_VERSION },
+      { type: "scheme_documents", order_id: orderId, scheme_codes: schemeCode ? [schemeCode] : [] },
+    ]);
+  }
+
+  /**
+   * The disclaimer text the checkout screens render, which of them must be ticked, and the
+   * AMFI identity block every page has to carry.
+   *
+   * Served from one place so legal changes wording once. `consent_text_version` travels with
+   * it because the eight-year audit trail records the version an investor agreed to, and the
+   * two must come from the same response or they can drift.
+   */
   disclaimers = async (_req, res) =>
-    res.json({ status: "success", data: { disclaimers: DISCLAIMERS, required: REQUIRED_ACKS } });
+    res.json({
+      status: "success",
+      data: {
+        disclaimers: DISCLAIMERS,
+        required: REQUIRED_ACKS,
+        consent_text_version: CONSENT_TEXT_VERSION,
+        // §1.A.1 — the mandatory branding line. Sent rather than hardcoded in the bundle so
+        // an ARN change does not need a frontend deploy, and so one wrong value cannot be
+        // right on one screen and stale on another.
+        distributor: {
+          legal_entity: LEGAL_ENTITY,
+          arn: DISTRIBUTOR_ARN,
+          line: DISTRIBUTOR_ARN
+            ? `${LEGAL_ENTITY} | AMFI-registered Mutual Fund Distributor | ARN: ${DISTRIBUTOR_ARN}`
+            : "",
+        },
+        // §1.B — the commission structure must be a FUNCTIONAL hyperlink at checkout.
+        commission_url: COMMISSION_URL,
+        commission_structure_version: COMMISSION_VERSION,
+      },
+    });
 
   /**
    * Ticket 16 — read a CAMS/KFintech CAS and return the holdings in it.
@@ -2538,15 +2606,11 @@ class StarMFController {
       // ponytail: mem_details BSE ke liye lazmi hai aur member code server-side value hai —
       // frontend ko wo bhejne ki zaroorat nahi. Shape paymentRequestData.getExchPgService se.
       payload.data = payload.data || {};
-      payload.data.mem_details = {
-        member: this.memberCode,
-        euin: "",
-        euin_flag: false,
-        sub_br_code: "",
-        sub_br_arn: "",
-        partner_id: "",
-        ...(payload.data.mem_details || {}),
-      };
+      // The caller's own mem_details is deliberately NOT spread over this any more: it was
+      // the last place a browser could put an EUIN into a payload bound for BSE, and the
+      // block it used to default to declared nothing at all (euin_flag false with an empty
+      // euin is "not declared", not "execution-only").
+      payload.data.mem_details = { member: this.memberCode, ...memDetails() };
       const response = await axios.post(
         `${this.bseDemoUrl}/get_exchpg_service`,
         payload,
@@ -2635,16 +2699,57 @@ class StarMFController {
   };
 
   // mandate register upi autopay
+  /**
+   * e-NACH / UPI AutoPay registration — §2 row 5 and §3.A of the compliance spec.
+   *
+   * Two things changed here, both compliance rather than plumbing:
+   *
+   * 1. It is no longer something that happens TO the investor. The SIP page used to fire
+   *    this silently the moment a registration succeeded, so a bank authorisation with a
+   *    standing debit limit was created as a side effect of buying, with the limit never
+   *    shown. The spec requires an explicit act, so this refuses a request that does not
+   *    carry `authorized: true` from the screen that displayed the limit.
+   *
+   * 2. The payload is bound server-side. It used to forward `req.body` untouched, meaning
+   *    the browser chose the UCC, the member code and the mandate amount.
+   */
   mandateRegisterUpiAutoPay = async (req, res) => {
     try {
+      const body = req.body || {};
+      if (body.authorized !== true) {
+        return res.status(400).json({
+          status: "error",
+          code: "mandate_not_authorized",
+          message: "An auto-debit mandate needs your explicit authorisation. Nothing has been registered.",
+        });
+      }
+
+      // The ceiling is the platform's, not the browser's. A mandate limit is the most an
+      // account can ever be debited under it, so an unbounded one from a request body is
+      // the single most costly field on this endpoint to get wrong.
+      const requested = Number(body?.data?.amount) || 0;
+      const ceiling = Number(process.env.MANDATE_MAX_LIMIT || 100000);
+      if (!(requested > 0) || requested > ceiling) {
+        return res.status(400).json({
+          status: "error",
+          code: "mandate_limit_invalid",
+          message: `An auto-debit limit must be between ₹1 and ₹${ceiling.toLocaleString("en-IN")}.`,
+        });
+      }
+
       const loginResp = await this.loginFunc();
 
       if (loginResp?.status === "error") {
         return res.json(loginResp);
       }
+      // UCC and member come from the verified session, never from the payload.
+      const payload = bindUcc({ data: { ...(body.data || {}) } }, req.ucc, this.memberCode);
+      payload.data.member = this.memberCode;
+      delete payload.data.authorized;
+
       const response = await axios.post(
         `${this.bseDemoUrl}/mandate_register`,
-        req.body,
+        payload,
         {
           headers: {
             Authorization: `Bearer ${this.accessToken}`,
@@ -2652,6 +2757,17 @@ class StarMFController {
           },
         }
       );
+
+      // §2 row 5 — the audit row carries what the investor actually authorised.
+      const out = response.data?.data || response.data || {};
+      await recordConsents(req, [
+        {
+          type: "enach_authorization",
+          mandate_id: String(out.mandate_id || out.umrn || out.member_mandate_id || "").slice(0, 64) || null,
+          max_limit: requested,
+          bank_ref: String(out.bank_ref || out.umrn_number || "").slice(0, 64) || null,
+        },
+      ]);
 
       return res.json({
         response: response.data,

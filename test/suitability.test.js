@@ -106,19 +106,44 @@ describe("ticket 22: disclaimer acknowledgement", () => {
   });
 
   it("a partial acknowledgement names what is still missing", () => {
-    const v = checkDisclaimers({ acknowledged: ["market_risk"] });
+    // Driven off REQUIRED_ACKS rather than a hardcoded pair: the AMFI consent matrix added
+    // three more keys, and a test that names them by hand goes stale every time compliance
+    // changes — which is the moment it most needs to be right.
+    const [first, ...rest] = REQUIRED_ACKS;
+    const v = checkDisclaimers({ acknowledged: [first] });
     assert.equal(v.ok, false);
-    assert.deepEqual(v.required, ["past_performance"]);
+    assert.deepEqual(v.required, rest);
   });
 
   it("accepts an array or an object of flags", () => {
+    const allTrue = Object.fromEntries(REQUIRED_ACKS.map((k) => [k, true]));
     assert.equal(checkDisclaimers({ acknowledged: REQUIRED_ACKS }).ok, true);
-    assert.equal(checkDisclaimers({ acknowledged: { market_risk: true, past_performance: true } }).ok, true);
+    assert.equal(checkDisclaimers({ acknowledged: allTrue }).ok, true);
     assert.equal(
-      checkDisclaimers({ acknowledged: { market_risk: true, past_performance: false } }).ok,
+      checkDisclaimers({ acknowledged: { ...allTrue, [REQUIRED_ACKS[0]]: false } }).ok,
       false,
       "an explicit false is not an acknowledgement"
     );
+  });
+
+  it("the AMFI consent matrix is part of what must be ticked", () => {
+    // §2 rows 1, 3 and 4. Each is a statement the investor MAKES, not a notice they are
+    // shown, so each has to be in the gate or the eight-year consent log records a tick
+    // that nothing ever enforced.
+    for (const key of ["execution_only", "regular_plan_commission", "scheme_documents"]) {
+      assert.ok(REQUIRED_ACKS.includes(key), `${key} is not gated`);
+    }
+    // AMFI publishes the execution-only wording; the parts that carry the meaning must survive
+    // any rewording through the env override.
+    assert.match(DISCLAIMERS.execution_only, /execution-only/i);
+    assert.match(DISCLAIMERS.execution_only, /without any interaction or advice/i);
+    assert.match(DISCLAIMERS.regular_plan_commission, /trail commission/i);
+    assert.match(DISCLAIMERS.regular_plan_commission, /AMFI-registered Mutual Fund Distributor/i);
+    assert.match(DISCLAIMERS.scheme_documents, /SID/);
+    assert.match(DISCLAIMERS.scheme_documents, /SAI/);
+    assert.match(DISCLAIMERS.scheme_documents, /KIM/);
+    // §1.B "No Guarantees" in full — shown at checkout, not ticked.
+    assert.match(DISCLAIMERS.no_guarantee, /do not offer assured or guaranteed returns/i);
   });
 
   it("a truthy non-flag does not count as acknowledgement", () => {

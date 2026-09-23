@@ -136,11 +136,18 @@ async function post(path, body, token = TOKEN) {
 }
 
 // Ticket 22: the acknowledgement rides with the order, per transaction.
-const ACKS = ["market_risk", "past_performance"];
+// The full required set, read from the source of truth. Hardcoding it here is how this
+// fixture went stale the moment the AMFI consent matrix added three more keys — and a stale
+// fixture is EASIER to satisfy than production, which is how a gap reaches QA.
+//
+// Resolved lazily: requiring suitability at the top of the file pulls in config.js before
+// `before()` has pointed LARAVEL_INVESTOR_URL at the local stub, and every request in this
+// file then authenticates against the real production host.
+const ACKS = () => require("../src/mf/suitability").REQUIRED_ACKS;
 const buy = (over = {}, dataOver = {}) => ({
   data: {
     orders: [{ type: "p", scheme: "007G", amount: 5000, cur: "INR", mem_ord_ref_id: "REF1", ...over }],
-    acknowledged: ACKS,
+    acknowledged: ACKS(),
     ...dataOver,
   },
 });
@@ -149,7 +156,7 @@ const buy = (over = {}, dataOver = {}) => ({
 const sell = (over = {}, dataOver = {}) => ({
   data: {
     orders: [{ type: "r", scheme: "007G", amount: 2000, folio: "F123", mem_ord_ref_id: "REF2", ...over }],
-    acknowledged: ACKS,
+    acknowledged: ACKS(),
     ...dataOver,
   },
 });
@@ -159,7 +166,7 @@ const swap = (over = {}, dataOver = {}) => ({
     orders: [
       { type: "sw", scheme: "007G", dest_scheme: "008G", folio: "F123", all_units: true, mem_ord_ref_id: "REF3", ...over },
     ],
-    acknowledged: ACKS,
+    acknowledged: ACKS(),
     ...dataOver,
   },
 });
@@ -393,15 +400,16 @@ describe("order path end to end", () => {
     const r = await post("/purchaseNewOrder", buy({}, { acknowledged: undefined }));
     assert.equal(r.status, 403);
     assert.equal(r.body.code, "disclaimer_not_acknowledged");
-    assert.deepEqual(r.body.required, ACKS);
+    assert.deepEqual(r.body.required, ACKS());
     assert.equal(sent, null, "BSE was called for an unacknowledged order");
   });
 
   it("ticket 22: a partial acknowledgement is refused and names what is missing", async () => {
     sent = null;
-    const r = await post("/purchaseNewOrder", buy({}, { acknowledged: ["market_risk"] }));
+    const [first, ...rest] = ACKS();
+    const r = await post("/purchaseNewOrder", buy({}, { acknowledged: [first] }));
     assert.equal(r.status, 403);
-    assert.deepEqual(r.body.required, ["past_performance"]);
+    assert.deepEqual(r.body.required, rest);
     assert.equal(sent, null);
   });
 
@@ -461,8 +469,12 @@ describe("order path end to end", () => {
     const r = await fetch(`${base}/disclaimers`);
     const body = await r.json();
     assert.equal(r.status, 200);
-    assert.deepEqual(body.data.required, ACKS);
-    for (const key of ACKS) assert.ok(body.data.disclaimers[key], `no text for ${key}`);
+    assert.deepEqual(body.data.required, ACKS());
+    for (const key of ACKS()) assert.ok(body.data.disclaimers[key], `no text for ${key}`);
+    // §1.A.1 — the AMFI identity block every screen has to carry, served from one place.
+    assert.ok("distributor" in body.data, "the distributor block is not served");
+    assert.ok("commission_url" in body.data, "the commission-structure link is not served");
+    assert.ok(body.data.consent_text_version, "consents cannot be versioned without this");
   });
 });
 

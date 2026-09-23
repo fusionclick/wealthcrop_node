@@ -12,6 +12,9 @@ const {
   mergeSipChanges,
   CANCEL_BY_INVESTOR,
 } = require("../src/mf/xsp");
+// Read from the source of truth: a hardcoded pair went stale the moment the AMFI consent
+// matrix added three keys, and a fixture easier to satisfy than production hides the gap.
+const { REQUIRED_ACKS } = require("../src/mf/suitability");
 const controller = require("../src/controllers/StarMFController");
 
 // ── payload shapes ────────────────────────────────────────────────────────────────────
@@ -159,7 +162,7 @@ const fakeRes = () => {
 const reqFor = (data) => ({
   ucc: "UCC-A",
   investor: { email: "a@example.com", kyc: {}, riskProfile: { profile: "Aggressive" } },
-  body: { data: { acknowledged: ["market_risk", "past_performance"], ...data } },
+  body: { data: { acknowledged: REQUIRED_ACKS, ...data } },
 });
 
 describe("every manage-a-SIP endpoint refuses a SIP that is not the caller's", () => {
@@ -378,7 +381,7 @@ describe("ticket 22: registering a SWP requires the acknowledgement", () => {
         txn_date: 10,
         start_date: "2026-11-10",
         end_date: "2027-11-10",
-        acknowledged: ["market_risk", "past_performance"],
+        acknowledged: REQUIRED_ACKS,
         ...over,
       },
       ...dataOver,

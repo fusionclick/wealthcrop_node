@@ -1,4 +1,5 @@
 const { isTransactable, allowedModes, schemeTransactions } = require("./scheme");
+const { memDetails } = require("./euin");
 
 const ALLOWED_TYPES = new Set(["p", "r", "sw"]);
 
@@ -187,6 +188,22 @@ function normalizeOrder(order, { ucc, memberCode, mobile }) {
     holder,
     phys_or_demat: hasDp ? "D" : "P",
     depository_acct: hasDp ? dp : {},
+    // AMFI: every order carries the distributor block and the execution-only declaration.
+    // Built AFTER the caller's fields are spread, so a browser-supplied `mem_details` can
+    // never overwrite it — which is exactly how a fabricated EUIN used to reach the exchange.
+    //
+    // No EUIN is read from the request ON PURPOSE. An EUIN attributes the trade to a named
+    // employee and earns them the commission; if the browser could name one, anybody could
+    // attribute anybody's order. This platform has no RM module, so every trade genuinely is
+    // execution-only — the day one exists, the EUIN comes from the investor's server-side
+    // assignment, never from the payload.
+    // Sent verbatim as AMFI writes it: EUIN empty, declaration set. Probed live against
+    // order_new on 2026-09-24 — the full block, an empty euin, and a named euin are all
+    // accepted, so nothing has to be trimmed here the way sxp_register forced.
+    //
+    // Note from that probe: BSE accepted the ILLEGAL pair (named euin + declaration) without
+    // complaint. The exchange will not catch it, so assertEuinSane is the only thing that does.
+    mem_details: memDetails({ omitEmpty: false }),
   };
 }
 

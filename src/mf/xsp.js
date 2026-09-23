@@ -188,6 +188,24 @@ function buildXspRegisterPayload(input = {}, { ucc, memberCode, email, dpId, cli
     ...(email ? { email } : {}),
     ...(end ? { end_date: end } : {}),
     ...(hasDp ? { depository_acct: { depository: "C", dp_id: dp, client_id: client } } : {}),
+    // ── No mem_details here, and that is a finding, not an omission ──────────────────────
+    // A SIP registration ought to carry the same execution-only declaration a one-off order
+    // does. BSE StarMF v2 has nowhere to put it. Probed live against the exchange on
+    // 2026-09-24, one variant at a time:
+    //
+    //   mem_details {euin_flag:true}        -> 579 invalid, field "euin_flag"
+    //   mem_details {euin:"", euin_flag:true} -> 579 invalid, field "euin_flag"
+    //   mem_details {euin_flag:"Y"}         -> 1581 invalid_json
+    //   mem_details {}                      -> passes shape, reaches the business rule
+    //   euin_flag at the TOP level          -> passes shape... and so does "banana",
+    //                                          i.e. it is ignored, not accepted
+    //
+    // So sending it breaks every registration (one bad field poisons the whole request) and
+    // the only shape that survives carries no declaration anyway. The consent is captured
+    // and stored in our own eight-year trail instead (see Backend/src/mf/consent.js), which
+    // is what §4.1 asks for; the exchange-side declaration rides on order_new, where it is
+    // accepted. Flagged to the client: BSE must expose the field on sxp_register for the
+    // registration itself to be declared.
   };
   return { data };
 }
