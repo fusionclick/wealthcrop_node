@@ -102,7 +102,12 @@ function validateOrder(body) {
   return { ok: true, type, order };
 }
 
-function checkSchemeLimits(order, scheme) {
+/**
+ * @param platformFloor QA 13.7 — the admin's own Min Lumpsum, applied ON TOP of the
+ *   scheme's. Zero (the default, and what an unreachable Laravel yields) means no house
+ *   rule, which is exactly how this behaved while the setting had no consumer at all.
+ */
+function checkSchemeLimits(order, scheme, platformFloor = 0) {
   if (!scheme) return { ok: false, error: "Scheme not found or not transactable" };
   const type = String(order.type || "").toLowerCase();
   if (type === "p" && !isTransactable(scheme)) {
@@ -119,7 +124,8 @@ function checkSchemeLimits(order, scheme) {
   };
 
   if (type === "p") {
-    const min = floor(txns.lumpsum, scheme.minLumpsum);
+    // The house floor never lowers the AMC's — whichever is higher wins.
+    const min = Math.max(floor(txns.lumpsum, scheme.minLumpsum), Number(platformFloor) || 0);
     if (min && Number(order.amount) < min) {
       return { ok: false, error: `Minimum investment is ₹${min}` };
     }

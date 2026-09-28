@@ -74,12 +74,21 @@ async function checkApproval(req, intent) {
   const amount = Number(intent?.amount) || 0;
   const threshold = await getThreshold();
 
-  // The overwhelmingly common path: the control is off, or the amount is under it. No
-  // network call at all, so an install with approvals disabled pays nothing for them.
-  if (threshold <= 0 || amount < threshold) return null;
+  // QA 3.8 — this used to return null here whenever the control was off or the amount was
+  // under the threshold, so Laravel was never asked and a transaction an admin had already
+  // REFUSED could simply be placed again. Zero is the default and the live value, so in
+  // practice no refusal was ever enforced. A standing refusal is not a function of today's
+  // threshold; only whether a NEW transaction needs approval is.
+  //
+  // So we always ask. Laravel answers `allow` off one indexed lookup when it has nothing to
+  // say, and an order path that already makes several BSE round trips does not notice it.
+  const mustApprove = threshold > 0 && amount >= threshold;
 
   const authorization = req.headers?.authorization;
   if (!authorization) {
+    // Nothing to check with. Refuse only if this transaction actually needed approval —
+    // otherwise a missing header would start blocking ordinary orders.
+    if (!mustApprove) return null;
     return {
       status: "error",
       code: "ORDER_APPROVAL_UNAVAILABLE",
@@ -110,8 +119,12 @@ async function checkApproval(req, intent) {
     );
     decision = res?.data;
   } catch (err) {
-    // Fails closed, on purpose. See the header comment.
     console.warn("[mf] approval check failed:", err.message);
+    // Fails closed, but only for a transaction that needed approving. Now that every order
+    // asks, failing closed unconditionally would turn a Laravel blip into a full trading
+    // outage — availability for the ordinary path is exactly what the old short-circuit was
+    // protecting, and that part of it was right.
+    if (!mustApprove) return null;
     return {
       status: "error",
       code: "ORDER_APPROVAL_UNAVAILABLE",
@@ -128,6 +141,11 @@ async function checkApproval(req, intent) {
       message: decision.message || "This transaction was not approved.",
     };
   }
+
+  // Anything else — "pending", or a shape we do not recognise. Holding an order that never
+  // needed approving would be a new way to fail; below the threshold, only an explicit
+  // "rejected" stops anything.
+  if (!mustApprove) return null;
 
   return {
     status: "error",

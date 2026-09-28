@@ -42,6 +42,7 @@ const { recordConsents } = require("../mf/consent");
 const { getDistributor } = require("../mf/distributor");
 const { getRiskPolicy } = require("../mf/riskPolicy");
 const { checkApproval } = require("../mf/approval");
+const { getLimits } = require("../mf/platformLimits");
 const { getHoldings } = require("../mf/holdings");
 const { mapBseErrors } = require("../mf/bseFieldErrors");
 const orderRequestData = require("../requestData/orderRequestData");
@@ -1197,6 +1198,17 @@ class StarMFController {
     const invalid = validateSxp({ ...input, sxp_type: type, scheme }, { available });
     if (invalid) return res.status(400).json({ status: "error", message: invalid });
 
+    // QA 13.7 — the admin's Min SIP. A SIP only: an STP moves money that is already
+    // invested and a SWP takes it out, so a house minimum on contributions says nothing
+    // about either. Zero means no house rule, which is how this behaved before the setting
+    // had a consumer.
+    if (type === "sip") {
+      const minSip = (await getLimits()).minSip;
+      if (minSip && Number(input.amount) < minSip) {
+        return res.status(400).json({ status: "error", message: `Minimum SIP instalment is ₹${minSip}` });
+      }
+    }
+
     // A SIP and an STP both BUY — repeatedly — so they take both gates, and an STP is judged
     // on the fund it buys into. A SWP only sells: it skips SUITABILITY for the same reason a
     // redemption does, but still takes the disclaimer gate (ticket 22 names it).
@@ -1506,7 +1518,12 @@ class StarMFController {
     }
     const ucc = req.ucc || investorUcc(req.investor);
     const scheme = await this.lookupScheme(parsed.order.scheme);
-    const limits = checkSchemeLimits(parsed.order, scheme);
+    // QA 13.7 — the admin's Min Lumpsum, on top of the scheme's own. Only a purchase has a
+    // house floor; a redemption is the investor's exit and takes the scheme's minimum alone.
+    const houseFloor = String(parsed.order.type || "").toLowerCase() === "p"
+      ? (await getLimits()).minLumpsum
+      : 0;
+    const limits = checkSchemeLimits(parsed.order, scheme, houseFloor);
     if (!limits.ok) {
       return res.status(400).json({ status: "error", message: limits.error });
     }
