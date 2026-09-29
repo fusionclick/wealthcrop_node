@@ -43,6 +43,7 @@ const { getDistributor } = require("../mf/distributor");
 const { getRiskPolicy } = require("../mf/riskPolicy");
 const { checkApproval } = require("../mf/approval");
 const { getLimits } = require("../mf/platformLimits");
+const { storedOrders, orderKey } = require("../mf/storedOrders");
 const { getHoldings } = require("../mf/holdings");
 const { mapBseErrors } = require("../mf/bseFieldErrors");
 const orderRequestData = require("../requestData/orderRequestData");
@@ -1818,6 +1819,22 @@ class StarMFController {
         status: o.status || "",
         remarks: o.remarks || o.message || "",
       }));
+
+      // QA 3.4 — "nothing gets updated in /user/mutual_fund/orders, only in /user/order".
+      //
+      // This read BSE's order_list and nothing else. An order placed through the app is
+      // written to Laravel's `bse_orders` the moment it is accepted, but BSE's own list can
+      // take a settlement cycle to show it — and on a demo UCC it may never. /user/order
+      // reads Laravel directly, so the same order appeared there and not here. Two pages,
+      // one query key, two different answers.
+      //
+      // Merged here rather than in either page: both already call this endpoint, so the
+      // fix lands once instead of twice, and every future caller inherits it.
+      const stored = await storedOrders(req);
+      const known = new Set(orders.map((o) => orderKey(o)));
+      for (const row of stored) {
+        if (!known.has(orderKey(row))) orders.push(row);
+      }
 
       // Newest first. Rows with no date sink to the bottom rather than jumbling the top.
       orders.sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0));
