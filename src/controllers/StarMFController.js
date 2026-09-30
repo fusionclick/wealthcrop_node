@@ -4,6 +4,7 @@ const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
 const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache, schemeTransactions, returnsBoth, rollingReturns, alphaBeta, lockInFromYears } = require("../mf/scheme");
 const { getEnrichment } = require("../mf/kuvera");
+const { redemptionVerdict } = require("../mf/lockin");
 const { benchmarkSeries, benchmarkFor } = require("../mf/benchmark");
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor, navLooksPlausible } = require("../mf/navStore");
@@ -1553,6 +1554,37 @@ class StarMFController {
       });
       if (gate) return res.status(403).json(gate);
     }
+    // QA 3.8 — the same lock-in the browser refuses, refused where a direct API call cannot
+    // walk around it. A switch counts: it SELLS the source folio, so the source is what is
+    // locked. Fails open in every uncertain case (see mf/lockin.js) — BSE performs the
+    // authoritative check, and this must never be the thing that traps an investor's money.
+    if (orderType === "r" || orderType === "sw") {
+      // Wrapped whole: this guard reads two upstreams (the enrichment feed and order_list),
+      // and a redemption must survive both being down. Only a positive verdict may refuse —
+      // a THROW here must never be the reason someone cannot reach their own money.
+      let verdict = null;
+      try {
+        // The SAME effective lock-in /scheme-details serves the browser: BSE's own column
+        // wins, but it is empty on this host, so an ELSS (locked three years by law) is only
+        // visible through the enrichment feed's years. Reading mapScheme alone would make
+        // this guard dead code on every scheme we actually have data for.
+        const mapped = mapScheme(scheme || {});
+        const extra = (await getEnrichment(mapped?.scheme_bse_code || parsed.order.scheme)) || {};
+        const lockIn = mapped?.lockIn || lockInFromYears(extra.lockInYears);
+        if (lockIn) {
+          // null = the list could not be read, which is "unknown", not "empty folio".
+          const rows = await this.heldRows(ucc, parsed.order.scheme, parsed.order.folio);
+          if (rows) {
+            verdict = redemptionVerdict({ lockIn, rows, allUnits: Boolean(parsed.order.all_units) });
+          }
+        }
+      } catch (e) {
+        console.warn("[lockin] guard skipped:", e.message);
+      }
+      if (verdict?.block) {
+        return res.status(403).json({ status: "error", message: verdict.reason });
+      }
+    }
     const mobile = normalizeMobile(parsed.order.mobnum) || investorMobile(req.investor);
     const dp = parsed.order.depository_acct?.dp_id ? parsed.order.depository_acct : await this.lookupDepository(ucc);
     // ponytail: payload wahi jo order 5001433387 par chala tha — scheme code jaisa
@@ -1593,6 +1625,21 @@ class StarMFController {
    * reject a real holding because a list call timed out.
    */
   async unitsHeld(ucc, schemeCode, folio) {
+    const mine = await this.heldRows(ucc, schemeCode, folio);
+    if (mine === null) return null;
+    // No matching row is a real answer — nothing is held here — unlike an unreadable list.
+    return mine.reduce((sum, o) => sum + (Number(o.units) || 0), 0);
+  }
+
+  /**
+   * The order_list rows for one scheme + folio that represent units actually held.
+   *
+   * Split out of unitsHeld so the lock-in guard measures the SAME rows the balance check
+   * does — two independent readings of "what is in this folio" is how the two would drift
+   * apart. Returns null when the list cannot be read, which every caller must treat as
+   * "unknown" rather than as an empty folio.
+   */
+  async heldRows(ucc, schemeCode, folio) {
     const want = String(schemeCode || "").trim().toUpperCase();
     if (!ucc || !want) return null;
     const result = await this.callTrxn("getAllOrders", {
@@ -1607,15 +1654,13 @@ class StarMFController {
     const HELD = new Set(["ALLOTTED", "ACCEPTED", "PAID"]);
     const rows = result?.data?.lists || result?.data?.items || result?.items || [];
     const wantFolio = String(folio || "").trim();
-    const mine = rows.filter((o) => {
+    return rows.filter((o) => {
       if (o?.status && !HELD.has(String(o.status).toUpperCase())) return false;
       const code = String(o?.scheme || o?.scheme_code || o?.scheme_bse_code || "").trim().toUpperCase();
       if (code !== want) return false;
       if (!wantFolio) return true;
       return String(o?.folio_num || o?.folio || "").trim() === wantFolio;
     });
-    // No matching row is a real answer — nothing is held here — unlike an unreadable list.
-    return mine.reduce((sum, o) => sum + (Number(o.units) || 0), 0);
   }
 
   getClientPortfolio = async (req, res) => {
