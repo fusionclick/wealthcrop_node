@@ -856,10 +856,18 @@ function paginate(list, start, length) {
 const LIST_TTL_MS = 5 * 60 * 1000;
 const listCache = new Map();
 
-function listCacheKey(q = {}) {
+function listCacheKey(q = {}, limits = null) {
   // Every field parseListQuery can filter or sort on has to appear here. A missing one
   // means two different result sets share a cache entry for five minutes.
+  //
+  // The platform floor is in the key for the same reason, though it is not a query field:
+  // since QA 6.2 it changes the `minLumpsum`/`minSip` each row carries. Keying on it makes a
+  // settings change miss the cache instead of waiting out the TTL — and, more importantly,
+  // stops the stale-if-error path (up to 24h) from ever serving a page built under a floor
+  // that is no longer the policy.
   return [
+    limits?.minLumpsum ?? "",
+    limits?.minSip ?? "",
     q.category,
     q.search,
     q.start,

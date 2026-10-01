@@ -7,6 +7,7 @@ const assert = require("node:assert");
 
 const { checkSchemeLimits } = require("../src/mf/order");
 const { NONE, peekLimits, applyFloor } = require("../src/mf/platformLimits");
+const { listCacheKey } = require("../src/mf/scheme");
 
 // BSE nests its money rules inside lumpsum[], keyed by scheme_transaction_type, with the
 // amounts one level further down again. Inventing a flatter shape here is what let the old
@@ -115,4 +116,49 @@ test("no house rule leaves an unpublished minimum unpublished", () => {
   applyFloor({ minLumpsum: 25000, minSip: 2500 }, other, null);
   assert.strictEqual(other.minLumpsum, 25000);
   assert.strictEqual(other.minSip, 2500);
+});
+
+// The list path (POST /master-scheme-list) floors its rows too, so an Explore card and the
+// fund page it opens quote the same minimum. Both of these pin down why that took care.
+test("flooring a page does not touch the shared master index row", () => {
+  // catalogue.js returns `rows.slice(...)` — a new array holding THE SAME objects as the
+  // process-wide index. applyFloor writes in place, so the controller copies each row first.
+  // Without the copy the index itself is raised, permanently, and raised again on every
+  // later read — the advertised minimum would climb each time the admin touched the setting.
+  const indexRow = { scheme_bse_code: "02", minLumpsum: 100, minSip: 100, txn: { sip: true } };
+  const index = [indexRow];
+
+  const page = index.slice(0, 1).map((row) => {
+    const copy = { ...row };
+    applyFloor({ minLumpsum: 1000, minSip: 500 }, copy);
+    return copy;
+  });
+
+  assert.strictEqual(page[0].minLumpsum, 1000);
+  assert.strictEqual(page[0].minSip, 500);
+  // The AMC's own numbers are still what the index holds.
+  assert.strictEqual(indexRow.minLumpsum, 100);
+  assert.strictEqual(indexRow.minSip, 100);
+
+  // Flooring the same index a second time must produce the same answer, never 1000 -> 10000.
+  const again = index.slice(0, 1).map((row) => {
+    const copy = { ...row };
+    applyFloor({ minLumpsum: 1000, minSip: 500 }, copy);
+    return copy;
+  });
+  assert.strictEqual(again[0].minLumpsum, 1000);
+});
+
+test("the list cache key carries the floor, so a settings change cannot be served stale", () => {
+  // The cache holds a page for 5 minutes and up to 24h as stale-if-error. The floor is baked
+  // into the rows, so without it in the key a changed minimum could be served for a day.
+  const q = { category: "equity", start: 0, length: 20 };
+  const low = listCacheKey(q, { minLumpsum: 1000, minSip: 500 });
+  const high = listCacheKey(q, { minLumpsum: 25000, minSip: 2500 });
+
+  assert.notStrictEqual(low, high);
+  // Same query, same floor, same entry — the key must not be accidentally unique.
+  assert.strictEqual(low, listCacheKey({ ...q }, { minLumpsum: 1000, minSip: 500 }));
+  // And a caller that passes no limits still gets a stable key rather than "undefined".
+  assert.strictEqual(listCacheKey(q), listCacheKey(q, null));
 });

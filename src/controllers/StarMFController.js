@@ -2020,7 +2020,10 @@ class StarMFController {
 
   getSchemeMasterList = async (req, res) => {
     const q = parseListQuery(req.body || {});
-    const cacheKey = listCacheKey(q);
+    // QA 6.2 — read once, and key the cache on it: an Explore card and the fund page it
+    // opens were quoting different minimums for the same fund.
+    const limits = await getLimits();
+    const cacheKey = listCacheKey(q, limits);
     const cached = getListCache(cacheKey);
     if (cached) return res.json(cached);
 
@@ -2029,7 +2032,20 @@ class StarMFController {
       // hai — `total` filter ke baad ki ginti hai, is liye frontend ka page count sach
       // bolta hai. Yahan dobara query() nahi: wo page ko dobara filter kar ke total
       // aur rows ko alag kar deta tha.
-      const { list: lists, total, priced, fetched, unpriced, fields, sample, warming, enrichment } = await getCatalogue(this, q);
+      const { list: pageRows, total, priced, fetched, unpriced, fields, sample, warming, enrichment } = await getCatalogue(this, q);
+
+      // The page rows are a fresh ARRAY but THE SAME OBJECTS as the process-wide master
+      // index (catalogue.js: `rows.slice(...)`), and applyFloor writes in place. Flooring
+      // them directly would raise the index itself — permanently, and again on every later
+      // read, so the number would climb each time the admin touched the setting. Shallow
+      // copy is enough: mapScheme flattens the minimums onto the row as scalars, and the
+      // only nested value (`txn`) is a set of booleans applyFloor never looks at.
+      const lists = pageRows.map((row) => {
+        const copy = { ...row };
+        applyFloor(limits, copy);
+        return copy;
+      });
+
       const lookedUp = q.search || q.isin || q.scheme_code || q.category;
       if (!lists.length && !fetched && !lookedUp) {
         // stale-if-error: kal ka catalogue dikhana 502 se behtar hai.
