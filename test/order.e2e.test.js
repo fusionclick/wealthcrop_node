@@ -25,8 +25,15 @@ const okInvestor = (over = {}) => ({
 let investorResponse = okInvestor();
 let investorStatus = 200;
 let investorUserAgent = "";
+// The caller's own orders as Laravel holds them (GET /bse/get-order) — what getOrder's
+// ownership check reads.
+let storedRows = [];
 const authServer = http.createServer((req, res) => {
   investorUserAgent = req.headers["user-agent"] || "";
+  if (req.url.includes("/bse/get-order")) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ status: true, data: storedRows }));
+  }
   res.writeHead(investorStatus, { "Content-Type": "application/json" });
   res.end(JSON.stringify(investorResponse));
 });
@@ -554,5 +561,65 @@ describe("kyc bse-status end to end", () => {
     assert.equal(r.status, 200);
     assert.equal(r.body.data.kyc_status, "verified");
     investorResponse = okInvestor();
+  });
+});
+
+// Audit #50 — any logged-in investor could read another investor's records: getOrder looked
+// an order up by id alone, orderHistory / getClientPortfolio fell back to a UCC named in the
+// body, and a set of unused UCC routes forwarded whatever they were sent to BSE.
+describe("one investor cannot read another's records", () => {
+  let controller;
+  const bseCalls = [];
+  before(async () => {
+    await boot();
+    controller = require("../src/controllers/StarMFController");
+    controller.trxnService.getOrder = async (_t, payload) => {
+      bseCalls.push(["getOrder", payload]);
+      return { status: "success", data: { items: [{ id: payload?.data?.id, status: "ALLOTTED" }] } };
+    };
+    controller.trxnService.getAllOrders = async (_t, payload) => {
+      bseCalls.push(["getAllOrders", payload]);
+      return { status: "success", data: { lists: [] } };
+    };
+  });
+  after(() => {
+    storedRows = [];
+    investorResponse = okInvestor();
+    server.close();
+  });
+
+  it("answers an order lookup only for the caller's own order", async () => {
+    storedRows = [{ bse_order_id: 5001, order_type: "purchase", inv_amo: 5000 }];
+    bseCalls.length = 0;
+
+    const mine = await post("/getOrder", { data: { id: 5001 } });
+    assert.equal(mine.status, 200);
+    assert.equal(bseCalls.length, 1);
+
+    const theirs = await post("/getOrder", { data: { id: 7777 } });
+    assert.equal(theirs.status, 404);
+    assert.equal(bseCalls.length, 1, "BSE was asked about someone else's order");
+  });
+
+  it("never reads a book from a UCC the caller merely names", async () => {
+    investorResponse = okInvestor({ kyc: { ucc_code: "", kyc_status: "pending" } });
+    bseCalls.length = 0;
+    for (const path of ["/orderHistory", "/getClientPortfolio"]) {
+      const r = await post(path, { ucc: "VICTIM01", data: { ucc: "VICTIM01" } });
+      assert.equal(r.status, 400, path);
+    }
+    assert.equal(bseCalls.length, 0, "a body-supplied UCC reached BSE");
+    investorResponse = okInvestor();
+  });
+
+  it("the unused UCC and order-list routes are gone", async () => {
+    for (const path of ["/getAllUcc", "/getparticularucc", "/deactivateUcc", "/createPhysicalUcc", "/getAllOrders"]) {
+      const r = await fetch(`${base}${path}`, {
+        method: "POST",
+        headers: { Authorization: TOKEN, "Content-Type": "application/json" },
+        body: "{}",
+      });
+      assert.equal(r.status, 404, path);
+    }
   });
 });

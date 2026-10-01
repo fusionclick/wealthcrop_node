@@ -25,6 +25,9 @@ const allowedOrigins = [
   "https://www.wealthcrop.co",
   "https://khelobindass.com",
   "https://www.khelobindass.com",
+  // A local dev frontend on another port (5173 is often taken), e.g.
+  // CORS_EXTRA_ORIGINS=http://localhost:5181 — unset everywhere else, so nothing changes there.
+  ...String(process.env.CORS_EXTRA_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean),
 ];
 app.use(
   cors({

@@ -48,7 +48,6 @@ const { storedOrders, orderKey } = require("../mf/storedOrders");
 const { getHoldings } = require("../mf/holdings");
 const { mapBseErrors } = require("../mf/bseFieldErrors");
 const orderRequestData = require("../requestData/orderRequestData");
-const uccRequestData = require("../requestData/uccRequestData");
 const nftRequestData = require("../requestData/nftRequestData");
 const schemeRequestData = require("../requestData/schemeRequestData");
 const paymentRequestData = require("../requestData/paymentRequestData");
@@ -846,41 +845,6 @@ class StarMFController {
     }
   };
 
-  // UCC Methods
-  getAllUcc = async (req, res) => {
-    let reqObj = uccRequestData.getAllUcc;
-    return this.handleUccRequest("getAllUcc", reqObj, res);
-  };
-  
-  createPhysicalUcc = async (req, res) => {
-    const reqObj = req.body && Object.keys(req.body).length ? req.body : uccRequestData.createPhysicalUcc;
-    return this.handleUccRequest("createPhysicalUcc", reqObj, res);
-  };
-  createDematUcc = async (req, res) => {
-    let reqObj = uccRequestData.createDematUcc;
-    return this.handleUccRequest("createDematUcc", reqObj, res);
-  };
-  createBothUcc = async (req, res) => {
-    let reqObj = uccRequestData.createBothUcc;
-    return this.handleUccRequest("createBothUcc", reqObj, res);
-  };
-  updateUccAddress = async (req, res) => {
-    let reqObj = uccRequestData.updateUccAddress;
-    return this.handleUccRequest("updateUccAddress", reqObj, res);
-  };
-  updateUccProfile = async (req, res) => {
-    let reqObj = uccRequestData.updateUccProfile;
-    return this.handleUccRequest("updateUccProfile", reqObj, res);
-  };
-  updateUccUpdateBankData = async (req, res) => {
-    let reqObj = uccRequestData.updateUccUpdateBankData;
-    return this.handleUccRequest("updateUccUpdateBankData", reqObj, res);
-  };
-  deactivateUcc = async (req, res) => {
-    let reqObj = uccRequestData.deactivateUcc;
-    return this.handleUccRequest("deactivateUcc", reqObj, res);
-  };
-
   // // Mandate Methods
   registerMandate = async (req, res) => {
     let reqObj = mandateRequestData.registerMandate;
@@ -1603,18 +1567,26 @@ class StarMFController {
     }
     return this.handleTrxnRequest("updatePurchaseOrder", bindUcc(req.body, req.ucc, this.memberCode), res);
   };
-  getAllOrders = async (req, res) => {
-    if (!req.body || !Object.keys(req.body).length) {
-      return res.status(400).json({ status: "error", message: "Filter payload is required" });
-    }
-    return this.handleTrxnRequest("getAllOrders", req.body, res);
-  };
   getOrder = async (req, res) => {
     if (!req.body || !Object.keys(req.body).length) {
       return res.status(400).json({ status: "error", message: "Order id is required" });
     }
+    // An order id on its own names ANY order on the member's book, and the UCC check never
+    // looks at an id — so this answered for other investors' orders too. Only the caller's own.
+    if (!(await this.ownsOrder(req, req.body?.data?.id ?? req.body?.data?.order_id))) {
+      return res.status(404).json({ status: "error", message: "Order not found" });
+    }
     return this.handleTrxnRequest("getOrder", req.body, res);
   };
+
+  /** True when `id` is one of the caller's orders: placed through the app, or in their QA book. */
+  async ownsOrder(req, id) {
+    if (id == null || id === "") return false;
+    const want = String(id);
+    const canned = qaAnswer("getAllOrders", { data: { filter_param: { ucc: [req.ucc] } } });
+    if (canned?.data?.lists?.some((o) => String(o.id) === want)) return true;
+    return (await storedOrders(req)).some((o) => String(o.id) === want);
+  }
 
   /**
    * Units this UCC actually holds in a scheme, optionally narrowed to one folio.
@@ -1665,7 +1637,9 @@ class StarMFController {
 
   getClientPortfolio = async (req, res) => {
     try {
-      const ucc = req.ucc || investorUcc(req.investor) || req.body?.data?.ucc || req.body?.ucc;
+      // The caller's own UCC only. A body-supplied one was the fallback for an investor with
+      // none of their own — which let any logged-in user read another investor's book.
+      const ucc = req.ucc || investorUcc(req.investor);
       if (!ucc) {
         return res.status(400).json({ status: "error", message: "ucc is required" });
       }
@@ -1810,7 +1784,9 @@ class StarMFController {
    */
   orderHistory = async (req, res) => {
     try {
-      const ucc = req.ucc || investorUcc(req.investor) || req.body?.data?.ucc || req.body?.ucc;
+      // The caller's own UCC only. A body-supplied one was the fallback for an investor with
+      // none of their own — which let any logged-in user read another investor's book.
+      const ucc = req.ucc || investorUcc(req.investor);
       if (!ucc) {
         return res.status(400).json({ status: "error", message: "ucc is required" });
       }
@@ -2896,41 +2872,6 @@ class StarMFController {
       });
     }
   }
-  getParticularUcc = async (req, res) => {
-    try {
-      const loginResp = await this.loginFunc();
-
-      if (loginResp?.status === "error") {
-        return res.json(loginResp);
-      }
-      const response = await axios.post(
-        `${this.bseDemoUrl}/v2/get_ucc`,
-        req.body,
-        {
-          headers: {
-            Authorization: `Bearer ${this.accessToken}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      return res.json({
-        response: response.data,
-      });
-    }catch (error) {
-      console.error(
-        "Ucc error",
-        error.response?.data || error.message
-      );
-
-      return res.status(500).json({
-        status: "error",
-        message: bseMessage(error),
-        detail: error.response?.data || null,
-      });
-    }
-  };
-
   // BSE payment gateway callback — forwards status to Laravel admin backend
   paymentCallback = async (req, res) => {
     try {

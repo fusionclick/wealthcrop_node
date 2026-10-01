@@ -6,15 +6,9 @@ const auth = [requireInvestor, requireMatchingUcc];
 
 // UCC
 router.post("/v2/add_ucc", requireInvestor, StarMFController.addUcc);
-router.post("/getAllUcc", requireInvestor, StarMFController.getAllUcc);
-router.post("/getparticularucc", requireInvestor, StarMFController.getParticularUcc);
-router.post("/createPhysicalUcc", requireInvestor, StarMFController.createPhysicalUcc);
-router.post("/createDematUcc", requireInvestor, StarMFController.createDematUcc);
-router.post("/createBothUcc", requireInvestor, StarMFController.createBothUcc);
-router.post("/updateUccAddress", requireInvestor, StarMFController.updateUccAddress);
-router.post("/updateUccProfile", requireInvestor, StarMFController.updateUccProfile);
-router.post("/updateUccUpdateBankData", requireInvestor, StarMFController.updateUccUpdateBankData);
-router.post("/deactivateUcc", requireInvestor, StarMFController.deactivateUcc);
+// getAllUcc, getparticularucc, create*/update*/deactivateUcc and getAllOrders are gone: no
+// screen called them, and any logged-in investor could use them to list every investor's
+// UCC record, read another's, or send the member's demo templates (deactivate included) to BSE.
 // KYC = BSE's ucc_status. Laravel calls this (bearer forwarded) and writes kyc_status itself.
 router.post("/kyc/bse-status", ...auth, StarMFController.kycBseStatus);
 
@@ -42,7 +36,6 @@ router.post("/cas/import", requireInvestor, StarMFController.casImport);
 router.get("/disclaimers", StarMFController.disclaimers);
 router.post("/purchaseNewOrder", ...auth, StarMFController.purchaseNewOrder);
 router.post("/updatePurchaseOrder", ...auth, StarMFController.updatePurchaseOrder);
-router.post("/getAllOrders", ...auth, StarMFController.getAllOrders);
 router.post("/getOrder", ...auth, StarMFController.getOrder);
 router.post("/getClientPortfolio", requireInvestor, StarMFController.getClientPortfolio);
 // Same BSE endpoint as getClientPortfolio, opposite intent: every order, every status.
