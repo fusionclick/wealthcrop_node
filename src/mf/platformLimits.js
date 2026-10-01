@@ -73,4 +73,47 @@ async function getLimits() {
 /** Synchronous read of whatever is cached — never triggers a fetch. */
 const peekLimits = () => cache.limits;
 
-module.exports = { getLimits, peekLimits, NONE };
+/**
+ * QA 6.2 — raise a scheme's own minimums to the platform floor, in place.
+ *
+ * The floor was enforced in the order path and nowhere else, so the fund page went on
+ * advertising BSE's ₹1,000 while an admin's ₹25,000 was what actually applied. An investor
+ * typed the amount the page asked for and was refused. Display and enforcement have to be
+ * the same number or one of them is lying.
+ *
+ * Only the two paths the order code actually refuses on — lumpsum purchase and SIP
+ * instalment — which are also the only two the admin can set. Redemption, switch and
+ * SWP/STP are untouched: a floor on money going IN says nothing about money coming out.
+ *
+ * A floor of 0 means "no house rule today" and leaves `null` as `null`, so "BSE did not
+ * say" still renders as nothing rather than as an invented minimum.
+ */
+function applyFloor(limits = NONE, mapped = null, transactions = null) {
+  const raise = (own, floor) => {
+    const f = Number(floor) || 0;
+    if (!f) return own;
+    const o = Number(own);
+    return Number.isFinite(o) && o > 0 ? Math.max(o, f) : f;
+  };
+
+  if (mapped) {
+    mapped.minLumpsum = raise(mapped.minLumpsum, limits.minLumpsum);
+    mapped.minSip = raise(mapped.minSip, limits.minSip);
+  }
+
+  if (transactions?.lumpsum) {
+    transactions.lumpsum.minAmount = raise(transactions.lumpsum.minAmount, limits.minLumpsum);
+  }
+
+  if (transactions?.sip) {
+    transactions.sip.minAmount = raise(transactions.sip.minAmount, limits.minSip);
+    // Each frequency carries its own minimum and the SIP form reads the one it picked.
+    for (const freq of transactions.sip.frequencies || []) {
+      freq.minAmount = raise(freq.minAmount, limits.minSip);
+    }
+  }
+
+  return { mapped, transactions };
+}
+
+module.exports = { getLimits, peekLimits, applyFloor, NONE };

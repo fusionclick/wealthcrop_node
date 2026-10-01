@@ -43,7 +43,7 @@ const { recordConsents } = require("../mf/consent");
 const { getDistributor } = require("../mf/distributor");
 const { getRiskPolicy } = require("../mf/riskPolicy");
 const { checkApproval } = require("../mf/approval");
-const { getLimits } = require("../mf/platformLimits");
+const { getLimits, applyFloor } = require("../mf/platformLimits");
 const { storedOrders, orderKey } = require("../mf/storedOrders");
 const { getHoldings } = require("../mf/holdings");
 const { mapBseErrors } = require("../mf/bseFieldErrors");
@@ -2136,6 +2136,11 @@ class StarMFController {
       // and mapScheme now reads them. Null still means BSE did not say — the UI omits the
       // line rather than inventing a floor the exchange never set.
       const transactions = schemeTransactions(scheme);
+
+      // QA 6.2 — the admin's own Min Lumpsum / Min SIP, applied where the page READS the
+      // number rather than only where the order path refuses it. Both objects are freshly
+      // built above, so raising them in place affects nothing else.
+      applyFloor(await getLimits(), mapped, transactions);
 
       let mf = null;
       try {

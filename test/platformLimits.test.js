@@ -6,7 +6,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 
 const { checkSchemeLimits } = require("../src/mf/order");
-const { NONE, peekLimits } = require("../src/mf/platformLimits");
+const { NONE, peekLimits, applyFloor } = require("../src/mf/platformLimits");
 
 // BSE nests its money rules inside lumpsum[], keyed by scheme_transaction_type, with the
 // amounts one level further down again. Inventing a flatter shape here is what let the old
@@ -69,4 +69,50 @@ test("before the first successful read there is no house rule — it fails open"
   // read would block orders that are perfectly valid.
   assert.deepStrictEqual(peekLimits(), NONE);
   assert.strictEqual(checkSchemeLimits(purchase(500), schemeWithMin(500), peekLimits().minLumpsum).ok, true);
+});
+
+// QA 6.2 — enforcement without display is a trap: the fund page kept advertising BSE's
+// minimum while the admin's higher floor was what actually applied, so an investor typed the
+// amount the page asked for and was refused. applyFloor is what makes the two agree.
+test("the floor raises what the page shows, for lumpsum and SIP only", () => {
+  const mapped = { minLumpsum: 1000, minSip: 500 };
+  const txns = {
+    lumpsum: { minAmount: 1000 },
+    sip: { minAmount: 500, frequencies: [{ minAmount: 500 }, { minAmount: 1000 }] },
+    redemption: { minAmount: 100 },
+    swp: { minAmount: 1000, frequencies: [{ minAmount: 1000 }] },
+  };
+
+  applyFloor({ minLumpsum: 25000, minSip: 2500 }, mapped, txns);
+
+  assert.strictEqual(mapped.minLumpsum, 25000);
+  assert.strictEqual(mapped.minSip, 2500);
+  assert.strictEqual(txns.lumpsum.minAmount, 25000);
+  assert.strictEqual(txns.sip.minAmount, 2500);
+  assert.deepStrictEqual(txns.sip.frequencies.map((f) => f.minAmount), [2500, 2500]);
+  // Money coming OUT is none of this setting's business.
+  assert.strictEqual(txns.redemption.minAmount, 100);
+  assert.strictEqual(txns.swp.minAmount, 1000);
+});
+
+test("the floor never lowers the AMC's own minimum", () => {
+  const mapped = { minLumpsum: 5000, minSip: 1000 };
+  applyFloor({ minLumpsum: 1000, minSip: 500 }, mapped, null);
+  assert.strictEqual(mapped.minLumpsum, 5000);
+  assert.strictEqual(mapped.minSip, 1000);
+});
+
+test("no house rule leaves an unpublished minimum unpublished", () => {
+  // null means "BSE did not say" and the UI omits the line. A floor of 0 must not turn that
+  // into a confident 0, which would read as "no minimum".
+  const mapped = { minLumpsum: null, minSip: null };
+  applyFloor(NONE, mapped, null);
+  assert.strictEqual(mapped.minLumpsum, null);
+  assert.strictEqual(mapped.minSip, null);
+
+  // But a real floor on a scheme BSE said nothing about IS the minimum.
+  const other = { minLumpsum: null, minSip: null };
+  applyFloor({ minLumpsum: 25000, minSip: 2500 }, other, null);
+  assert.strictEqual(other.minLumpsum, 25000);
+  assert.strictEqual(other.minSip, 2500);
 });
