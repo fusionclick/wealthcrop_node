@@ -139,6 +139,11 @@ describe("catalogue", () => {
     assert.equal(query(cat.list, { category: "gold_funds" }).total, 1);
     assert.equal(query(cat.list, { scheme_code: "L1-GR" }).total, 1, "exact code lookup");
 
+    const cheapest = await getCatalogue(c, { sort: "nav", order: "asc", length: 1 });
+    assert.equal(cheapest.list[0].nav, 30.5, "AMFI NAV ranks the whole index before pagination");
+    const next = await getCatalogue(c, { sort: "nav", order: "asc", start: 1, length: 1 });
+    assert.equal(next.list[0].nav, 241.87, "the next NAV-ranked page follows the first");
+
     amfiMod.getAmfiNavs = realGet;
   });
 });

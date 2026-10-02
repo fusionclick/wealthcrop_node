@@ -277,7 +277,9 @@ async function getCatalogue(controller, q = {}) {
   // Admin's classification rides along on the returned page only — it changes far more
   // often than the master index, so it must not be baked into it.
   const cats = await getCategories();
-  const { total, lists } = query(priced, { ...q, start, length });
+  // BSE master rows have no NAV; attach AMFI prices before ranking and slicing the page.
+  const ranked = q.sort === "nav" ? priced.map((item) => ({ ...item, nav: navOf(item) })) : priced;
+  const { total, lists } = query(ranked, { ...q, start, length });
   // Enrichment for the rows actually being returned: the warm pass fills the index in the
   // background, this makes sure the 20 rows on screen are not waiting for it.
   const list = await enrichRows(
