@@ -6,11 +6,6 @@ const ALLOWED_TYPES = new Set(["p", "r", "sw"]);
 function investorUcc(investor) {
   const ucc = String(investor?.kyc?.ucc_code || investor?.kyc?.ucc || "").trim();
   if (ucc) return ucc;
-  // ponytail: test account — same email as Laravel forgot-PIN bypass. USRWC003 ko
-  // BSE ne PENDING_VERIFICATION par atka diya aur wahan order lena band kar diya;
-  // USRWC56442 APPROVED hai. Asli fix user_kycs.ucc_code bharna hai, ye sirf tab
-  // chalta hai jab wo column khali ho.
-  if (String(investor?.email || "").toLowerCase() === "rminhal783@gmail.com") return "USRWC56442";
   return "";
 }
 
@@ -22,17 +17,8 @@ function normalizeMobile(raw) {
   return /^[6-9]\d{9}$/.test(ten) ? ten : "";
 }
 
-// ponytail: signup ab sirf email leta hai, par BSE har order par ek 10-digit mobile
-// mangta hai — is liye placeholder. Ceiling: BSE ka SMS/2FA is number par jayega,
-// koi user use nahi kar sakta. Jis din profile mein number wapas aaye, ye fallback
-// hata do aur caller ko 400 dene do.
-const BSE_PLACEHOLDER_MOBILE = "9999999999";
-
 function investorMobile(investor) {
-  const own = normalizeMobile(investor?.phone || investor?.mobile || investor?.mobnum);
-  if (own) return own;
-  if (String(investor?.email || "").toLowerCase() === "rminhal783@gmail.com") return "8617029131";
-  return BSE_PLACEHOLDER_MOBILE;
+  return normalizeMobile(investor?.phone || investor?.mobile || investor?.mobnum);
 }
 
 function requestedUcc(body = {}) {
@@ -277,7 +263,6 @@ function normalizeOrder(order, { ucc, memberCode, mobile, euin = "" }) {
 
 module.exports = {
   normalizeMobile,
-  BSE_PLACEHOLDER_MOBILE,
   investorMobile,
   investorUcc,
   requestedUcc,

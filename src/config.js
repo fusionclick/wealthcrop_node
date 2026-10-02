@@ -52,7 +52,7 @@ exports.resolveInvestorUrl = resolveInvestorUrl;
  */
 const isBseDemo = (url = baseUrl) => /starmfv2demo\.bseindia\.com/i.test(String(url || ""));
 exports.isBseDemo = isBseDemo;
-exports.IS_BSE_DEMO = isBseDemo(baseUrl);
+exports.IS_BSE_DEMO = process.env.NODE_ENV !== "production" && isBseDemo(baseUrl);
 
 exports.configData = {
   username: process.env.BSE_USERNAME || "",

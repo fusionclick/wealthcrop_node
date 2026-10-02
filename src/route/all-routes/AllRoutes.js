@@ -1,5 +1,5 @@
 const StarMFController = require("../../controllers/StarMFController");
-const { requireInvestor, requireMatchingUcc } = require("../../middleware/requireInvestor");
+const { requireInvestor, requireMatchingUcc, requireLiveBse } = require("../../middleware/requireInvestor");
 const router = require("express").Router();
 // Stateless public calculation; no investor book or credentials are exposed.
 router.post('/allocation-review', async (req, res, next) => {
@@ -16,6 +16,16 @@ router.post('/allocation-review', async (req, res, next) => {
 });
 
 const auth = [requireInvestor, requireMatchingUcc];
+const exchangeActions = new Set([
+  "/v2/add_ucc", "/xspRegister", "/pauseXsp", "/cancelXsp", "/topupXsp", "/resumeXsp", "/modifyXsp",
+  "/purchaseNewOrder", "/updatePurchaseOrder", "/cancelPurchaseOrder", "/basketCheckout",
+  "/get-payment-link", "/sendPaymentInfo", "/uploadMis",
+  "/nftBankAccountChange", "/nftNomineeChange", "/nftContactChange",
+  "/get2FAUccNom", "/get2FAUccElog", "/get2FAVerifyMandateCancel", "/get2FAVerifySxpReg", "/get2FAVerifyOrderCancel",
+  "/registerMandate", "/registerMandateUPI", "/registerMandateEnach", "/registerMandateNach",
+  "/cancelMandate", "/linkMandate", "/mandateDelink", "/updateMandate", "/mandate_register/upi-autopay",
+]);
+router.use((req, res, next) => exchangeActions.has(req.path) ? requireLiveBse(req, res, next) : next());
 router.post('/nav-quotes', async (req, res, next) => {
   const isins = req.body?.isins;
   if (!Array.isArray(isins) || !isins.length || isins.length > 20 || !isins.every((isin) => /^IN[A-Z0-9]{10}$/.test(isin))) {

@@ -398,13 +398,13 @@ describe("mobile normalization", () => {
     assert.equal(normalizeMobile("12345"), "");
     assert.equal(normalizeMobile(""), "");
   });
-  it("falls back to the test account number only for that email", () => {
-    const { BSE_PLACEHOLDER_MOBILE } = require("../src/mf/order");
-    assert.equal(investorMobile({ email: "rminhal783@gmail.com", phone: "1987542630" }), "8617029131");
-    assert.equal(investorMobile({ email: "someone@else.com", phone: "9876543210" }), "9876543210");
-    // signup email-only hai: koi usable number na ho to BSE placeholder jata hai
-    assert.equal(investorMobile({ email: "someone@else.com", phone: "1987542630" }), BSE_PLACEHOLDER_MOBILE);
-    assert.equal(investorMobile({}), BSE_PLACEHOLDER_MOBILE);
+  it("uses only the investor's own mobile and UCC, including the former demo email", () => {
+    const { investorUcc } = require("../src/mf/order");
+    assert.equal(investorMobile({ email: "rminhal783@gmail.com", phone: "1987542630" }), "");
+    assert.equal(investorUcc({ email: "rminhal783@gmail.com" }), "");
+    assert.equal(investorMobile({ phone: "+91 9876543210" }), "9876543210");
+    assert.equal(investorUcc({ kyc: { ucc_code: "ACTUAL-UCC" } }), "ACTUAL-UCC");
+    assert.equal(investorMobile({}), "");
   });
   it("puts the clean number on the order and every holder", () => {
     const o = normalizeOrder(

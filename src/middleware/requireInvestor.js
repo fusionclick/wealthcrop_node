@@ -1,6 +1,20 @@
 const axios = require("axios");
 const { configData } = require("../config");
 const { uccMatches } = require("../mf/order");
+const { isBseDemo } = require("../config");
+
+// Production requests must never submit money/account changes to the UAT exchange.
+function requireLiveBse(req, res, next) {
+  if (process.env.NODE_ENV !== "production") return next();
+  if (isBseDemo(configData.baseUrl)) {
+    return res.status(503).json({ status: "error", code: "BSE_LIVE_UNAVAILABLE", message: "Live BSE access is not configured. No exchange action was submitted." });
+  }
+  if (req.path === "/v2/add_ucc") {
+    // The current template invents FATCA/occupation declarations that this form never captures.
+    return res.status(503).json({ status: "error", code: "LIVE_ONBOARDING_UNAVAILABLE", message: "Live onboarding requires verified investor declarations before submission." });
+  }
+  return next();
+}
 
 async function requireInvestor(req, res, next) {
   const auth = String(
@@ -46,4 +60,4 @@ function requireMatchingUcc(req, res, next) {
   return next();
 }
 
-module.exports = { requireInvestor, requireMatchingUcc };
+module.exports = { requireInvestor, requireMatchingUcc, requireLiveBse };

@@ -12,7 +12,7 @@ const { getNavs, navFor, navDateFor, navLooksPlausible } = require("../mf/navSto
 const { getCatalogue, schemeCategories, categoryRanking, AMFI_FALLBACK } = require("../mf/catalogue");
 const { getHidden, isHidden } = require("../mf/hidden");
 const { getAmfiNavs } = require("../mf/amfiNav");
-const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE, switchRefusal, panVerified, PAN_NOT_VERIFIED, buildCancelOrderPayload } = require("../mf/order");
+const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, switchRefusal, panVerified, PAN_NOT_VERIFIED, buildCancelOrderPayload } = require("../mf/order");
 const { kycFromUcc, uccPan, investorPan } = require("../mf/kyc");
 const { pdfLines, parseCas, casHoldings } = require("../mf/cas");
 const { answer: qaAnswer, qaScheme } = require("../mf/qaFixtures");
@@ -437,6 +437,9 @@ class StarMFController {
         message: 'Only an individual PAN (4th letter P) can be registered here'
       });
     }
+    if (!normalizeMobile(mobile)) {
+      return res.status(400).json({ error: 'Validation failed', field: 'contact.mobile', message: 'A valid investor mobile number is required.' });
+    }
 
     const makeRequest = async () => {
       if (!this.bseToken) {
@@ -500,7 +503,7 @@ class StarMFController {
                       },
                       "contact": [
                           {
-                              "contact_number": normalizeMobile(mobile) || BSE_PLACEHOLDER_MOBILE,
+                              "contact_number": normalizeMobile(mobile),
                               "country_code": "91",
                               "whose_contact_number": "SE",
                               "email_address": email || "v2001@gmail.com",
@@ -1724,6 +1727,7 @@ class StarMFController {
       }
     }
     const mobile = normalizeMobile(parsed.order.mobnum) || investorMobile(req.investor);
+    if (!mobile) return res.status(400).json({ status: "error", message: "A valid investor mobile number is required." });
     const dp = parsed.order.depository_acct?.dp_id ? parsed.order.depository_acct : await this.lookupDepository(ucc);
     // ponytail: payload wahi jo order 5001433387 par chala tha — scheme code jaisa
     // frontend bheje, mode DP par, aur koi pre-flight guard nahi. Resolved code aur
