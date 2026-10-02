@@ -13,8 +13,33 @@ test("equity categories map to the index their factsheet uses", () => {
   assert.strictEqual(categoryBenchmark("Equity", "Equity • Flexi Cap"), "Nifty 500");
   assert.strictEqual(categoryBenchmark("Equity", "Equity • Multi Cap"), "Nifty 500");
   assert.strictEqual(categoryBenchmark("Equity", "Equity • ELSS"), "Nifty 500");
-  assert.strictEqual(categoryBenchmark("Equity", "Equity • Mid Cap"), "Nifty Midcap 50");
+  // Audit #5 — Midcap 150 (the Tier-1 benchmark) was re-probed and IS served daily now.
+  assert.strictEqual(categoryBenchmark("Equity", "Equity • Mid Cap"), "Nifty Midcap 150");
   assert.strictEqual(categoryBenchmark("Equity", "Sectoral", "SBI Banking & Financial Services Fund"), "Nifty Bank");
+  // The only other sector series that come back daily.
+  assert.strictEqual(categoryBenchmark("Equity", "Equity • Sectoral / Thematic", "SBI TECHNOLOGY OPPORTUNITIES FUND"), "Nifty IT");
+  assert.strictEqual(categoryBenchmark("Equity", "Equity • Sectoral / Thematic", "TATA DIGITAL INDIA FUND"), "Nifty IT");
+  assert.strictEqual(categoryBenchmark("Equity", "Equity • Sectoral / Thematic", "NIPPON INDIA PHARMA FUND"), "Nifty Pharma");
+});
+
+test("an AMC called 'Bank of …' is not a banking fund", () => {
+  // The bare word "bank" used to measure Bank of India's flexi cap fund against Nifty Bank.
+  assert.strictEqual(categoryBenchmark("Equity", "Equity • Flexi Cap", "BANK OF INDIA FLEXI CAP FUND"), "Nifty 500");
+  assert.strictEqual(categoryBenchmark("Equity", "Equity • Small Cap", "BANK OF INDIA SMALL CAP FUND"), "Nifty Smallcap 250");
+});
+
+test("an index fund is measured against the index it tracks — only when that IS its mandate", () => {
+  const { trackedIndex } = require("../src/mf/benchmark");
+  assert.strictEqual(trackedIndex("UTI NIFTY 50 INDEX FUND - DIRECT PLAN - GROWTH"), "Nifty 50");
+  assert.strictEqual(trackedIndex("FRANKLIN INDIA NSE NIFTY 50 INDEX FUND - DIRECT IDCW PAYOUT"), "Nifty 50");
+  assert.strictEqual(trackedIndex("SBI NIFTY NEXT 50 INDEX FUND"), "Nifty Next 50");
+  assert.strictEqual(trackedIndex("MOTILAL OSWAL NIFTY MIDCAP 150 INDEX FUND"), "Nifty Midcap 150");
+  // A factor index built on top of a parent index is a different series.
+  assert.strictEqual(trackedIndex("BANDHAN NIFTY 100 LOW VOLATILITY 30 INDEX FUND"), null);
+  assert.strictEqual(trackedIndex("DSP NIFTY 50 EQUAL WEIGHT INDEX FUND"), null);
+  // An active fund names no index.
+  assert.strictEqual(trackedIndex("FRANKLIN INDIA BLUECHIP FUND"), null);
+  assert.deepStrictEqual(benchmarkFor({ name: "UTI NIFTY 50 INDEX FUND", category: "Index Funds" }), { name: "Nifty 50", source: "index" });
 });
 
 test("large & mid is not swallowed by the large cap rule", () => {
@@ -24,10 +49,12 @@ test("large & mid is not swallowed by the large cap rule", () => {
   assert.strictEqual(categoryBenchmark("Equity", "Equity • Large Mid Cap"), "Nifty 500");
 });
 
-test("small cap gets NO benchmark rather than a wrong one", () => {
-  // Its Tier-1 benchmark is Nifty Smallcap 250, which the price source does not publish.
-  // Measuring a small cap fund against Nifty 500 would produce a beta that means nothing.
-  assert.strictEqual(categoryBenchmark("Equity", "Equity • Small Cap"), null);
+test("small cap is measured against Smallcap 250, never a broader index", () => {
+  // Audit #5 — its Tier-1 benchmark, Nifty Smallcap 250, was re-probed on 2026-10-02 and the
+  // price source serves it daily from 2016 (NIFTYSMLCAP250.NS). Before that it got nothing,
+  // which was right then: measuring a small cap fund against Nifty 500 means nothing.
+  assert.strictEqual(categoryBenchmark("Equity", "Equity • Small Cap"), "Nifty Smallcap 250");
+  assert.notStrictEqual(categoryBenchmark("Equity", "Equity • Small Cap"), "Nifty 500");
 });
 
 test("debt, hybrid, gold and international get nothing", () => {
@@ -49,7 +76,7 @@ test("an unknown or empty category yields nothing", () => {
 test("every index the category table names is one the price source can actually resolve", () => {
   // The whole point of the table is that these resolve; a typo here would silently mean no
   // Alpha/Beta for a whole category, which is exactly the bug being fixed.
-  for (const name of ["Nifty 100", "Nifty 500", "Nifty Midcap 50", "Nifty Bank"]) {
+  for (const name of ["Nifty 100", "Nifty 500", "Nifty Midcap 150", "Nifty Smallcap 250", "Nifty Bank", "Nifty IT", "Nifty Pharma"]) {
     const hit = resolveBenchmark(name);
     assert.ok(hit, `${name} must resolve to an index symbol`);
     assert.ok(INDEX_MAP.some(([, sym]) => sym === hit.symbol), `${name} -> ${hit.symbol} must be in INDEX_MAP`);

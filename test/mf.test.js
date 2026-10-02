@@ -115,7 +115,7 @@ describe("catalogue", () => {
   it("paginates and parses list query", () => {
     // Ranking/filtering defaults ride along on every parse — they must all be present so
     // listCacheKey can key on them.
-    const noFilters = { risk: "", txn: "", minAge: null, maxAge: null, minAum: null, maxAum: null, minReturn: null, returnPeriod: "1Y", sort: "", order: "desc" };
+    const noFilters = { risk: "", txn: "", minAge: null, maxAge: null, minAum: null, maxAum: null, minReturn: null, returnPeriod: "1Y", sort: "", order: "desc", schemeCategory: "", subCategory: "" };
     const q = parseListQuery({ start: 20, length: 10, search: "gold" });
     assert.deepEqual(q, { start: 20, length: 10, search: "gold", category: "", isin: "", scheme_code: "", plan: "", sip: "", mode: "", ...noFilters });
     assert.deepEqual(
@@ -146,6 +146,12 @@ describe("catalogue", () => {
     assert.notEqual(
       listCacheKey(parseListQuery({ sort: "returns_1y", order: "asc" })),
       listCacheKey(parseListQuery({ sort: "returns_1y", order: "desc" }))
+    );
+    // Audit #11 — the category / sub-category filter is keyed too.
+    assert.equal(parseListQuery({ schemeCategory: " Equity ", subCategory: "Small Cap" }).schemeCategory, "Equity");
+    assert.notEqual(
+      listCacheKey(parseListQuery({ schemeCategory: "Equity", subCategory: "Small Cap" })),
+      listCacheKey(parseListQuery({ schemeCategory: "Equity", subCategory: "Mid Cap" }))
     );
     assert.deepEqual(paginate([1, 2, 3, 4, 5], 2, 2), [3, 4]);
     assert.equal(matchesCategory({ name: "HDFC Large Cap", subType: "Equity • Large Cap" }, "large_cap"), true);

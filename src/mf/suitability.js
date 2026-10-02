@@ -66,6 +66,19 @@ const ALWAYS_SUITABLE = /debt|liquid|overnight|money\s*market|gilt/i;
  * then nothing here can show the fund to be unsuitable, so it goes through.
  */
 function checkSuitability(investor, scheme = {}, policy = null) {
+  // Audit #31 — every page says "all transactions on this platform are under Regular Plans".
+  // A Direct plan bought here would make that disclosure false, so it is refused at the gate
+  // every buy already passes through (purchase, switch-in, SIP, STP, modify, top-up). Only
+  // a row that SAYS Direct is refused: mapScheme's planOf reads BSE's scheme_plan and the
+  // name, and a scheme it cannot place stays Regular — fail-open on the scheme, as below.
+  if (String(scheme.plan || "").toLowerCase() === "direct") {
+    return {
+      ok: false,
+      code: "direct_plan_not_offered",
+      message:
+        "This is a Direct plan. As a mutual fund distributor we offer Regular plans only — choose the Regular plan of this scheme.",
+    };
+  }
   const profile = investorProfileOf(investor);
   if (!profile) {
     return {
@@ -122,7 +135,10 @@ function checkSuitability(investor, scheme = {}, policy = null) {
  * env value rather than a literal: a wrong ARN on a screen is a misrepresentation, and the
  * ARN that used to be hardcoded in this codebase belonged to somebody else.
  */
-const LEGAL_ENTITY = process.env.LEGAL_ENTITY_NAME || "Wealthcrop Advisory Pvt Ltd";
+// Audit #34 — no company name is invented here: the legal entity is the client's fact and
+// comes from Admin → Settings (see /disclaimers, which swaps it in). Until then the text
+// says "the distributor", which is AMFI's own wording on the application form.
+const LEGAL_ENTITY = String(process.env.LEGAL_ENTITY_NAME || "").trim() || "the distributor";
 const DISTRIBUTOR_ARN = String(process.env.DISTRIBUTOR_ARN || "").trim();
 
 const DISCLAIMERS = {
@@ -147,7 +163,15 @@ const DISCLAIMERS = {
   // name so a rename cannot leave the declaration naming a company that no longer exists.
   execution_only:
     process.env.DISCLAIMER_EXECUTION_ONLY ||
-    `I/We hereby confirm that this is an 'execution-only' transaction executed without any interaction or advice by the employee/sales person of ${LEGAL_ENTITY} or notwithstanding the advice of inappropriateness, if any, provided by ${LEGAL_ENTITY}.`,
+    `You are processing an Execution-Only transaction. This scheme selection has been made independently by you without any advice from ${LEGAL_ENTITY}.`,
+
+  // §2 row 2 (Audit #33) — the other half of the EUIN pair: the investor names the employee
+  // who helped, in place of the execution-only declaration. {rm} and {euin} are filled by
+  // the checkout from the admin's RM register; the order then carries that EUIN with
+  // EUINDecl "N". Never ticked alongside execution_only — checkDisclaimers refuses both.
+  rm_assisted:
+    process.env.DISCLAIMER_RM_ASSISTED ||
+    `I/We confirm that this transaction was placed with the assistance of {rm} (EUIN {euin}), an employee of ${LEGAL_ENTITY}.`,
 
   // §1.A.2 + §2 row 3. The commission disclosure is the reason this platform is paid; an
   // investor agreeing to a Regular Plan has to be told that before the money moves.
@@ -187,20 +211,46 @@ const REQUIRED_ACKS = [
 ];
 
 /**
- * @returns {{ok: true} | {ok: false, code, message, required: string[]}}
+ * @param rms  the admin's RM register, [{ euin, name }] (Audit #33)
+ * @returns {{ok: true, euin: string} | {ok: false, code, message, required?: string[]}}
  *
  * The acknowledgement travels with the order rather than being remembered against the
  * account: SEBI's warning is per transaction, and a flag set once at signup would let every
  * later order through unshown — which is the bypass the ticket names.
+ *
+ * Audit #33 — an RM-assisted order acknowledges `rm_assisted:<EUIN>` INSTEAD of
+ * execution_only. The EUIN rides inside the acknowledgement because that is what it is:
+ * the investor's own statement of who helped. It is honoured only when it names someone on
+ * the admin's register — otherwise any browser could attribute any order to any EUIN — and
+ * `euin` comes back so the caller sends exactly that one to BSE.
  */
-function checkDisclaimers(input = {}) {
+function checkDisclaimers(input = {}, { rms = [] } = {}) {
   const raw = input.acknowledged ?? input.disclaimers ?? input.acknowledgements;
   const acked = Array.isArray(raw)
     ? new Set(raw.map(String))
     : raw && typeof raw === "object"
     ? new Set(Object.entries(raw).filter(([, v]) => v === true).map(([k]) => k))
     : new Set();
-  const missing = REQUIRED_ACKS.filter((k) => !acked.has(k));
+
+  const named = [...acked].map((k) => /^rm_assisted:(.+)$/.exec(k)?.[1]).filter(Boolean);
+  const euin = String(named[0] || "").trim().toUpperCase();
+  if (named.length > 1 || (euin && acked.has("execution_only"))) {
+    // The two declarations contradict each other, exactly like EUINDecl "Y" with an EUIN.
+    return {
+      ok: false,
+      code: "rm_declaration_conflict",
+      message: "An order is either placed on your own (execution-only) or with one relationship manager's help — not both.",
+    };
+  }
+  if (euin && !rms.some((r) => String(r?.euin || "").trim().toUpperCase() === euin)) {
+    return {
+      ok: false,
+      code: "rm_not_registered",
+      message: "That relationship manager is not on our register. Choose one from the list, or place the order on your own.",
+    };
+  }
+
+  const missing = REQUIRED_ACKS.filter((k) => !(acked.has(k) || (k === "execution_only" && euin)));
   if (missing.length) {
     return {
       ok: false,
@@ -209,7 +259,7 @@ function checkDisclaimers(input = {}) {
       required: missing,
     };
   }
-  return { ok: true };
+  return { ok: true, euin };
 }
 
 module.exports = {

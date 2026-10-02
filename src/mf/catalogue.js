@@ -1,9 +1,10 @@
-const { mapScheme, isTransactable, matchesCategory } = require("./scheme");
+const { mapScheme, isTransactable, matchesCategory, subCategoryOf } = require("./scheme");
 const { getAmfiNavs } = require("./amfiNav");
 const { navFor, navDateFor } = require("./navStore");
 const { getHidden, isHidden } = require("./hidden");
 const { getCategories, categoryOf } = require("./categories");
 const { enrichRows, warmEnrichment, applyCached, enrichmentStats } = require("./kuvera");
+const { snapshotMaster } = require("./devSnapshot");
 
 // Page size the caller may ask for. BSE ka master khud chunk-chunk aata hai (CHUNK).
 const FETCH_MAX = 100;
@@ -46,7 +47,33 @@ async function amfiCatalogue(q) {
   const hidden = await getHidden();
   const { total, lists } = query(all.filter((item) => !isHidden(hidden, item)), q);
   console.warn(`[mf] BSE unreachable — serving ${lists.length}/${total} schemes from AMFI (MF_AMFI_FALLBACK=1)`);
-  return { list: lists, total, unpriced: 0, priced: all.length, fetched: all.length, fields: Object.keys(schemes[0]), sample: null, source: "amfi" };
+  return { list: lists, total, unpriced: 0, priced: all.length, fetched: all.length, fields: Object.keys(schemes[0]), sample: null, source: "amfi", facets: facetsOf(all) };
+}
+
+/**
+ * Audit #11 — what the Category → Sub-category filter offers: every category on the index
+ * with the sub-categories found under it, in the catalogue's own words rather than a
+ * hard-coded list. Cached per index array — the index changes every 6 hours, this is a pass
+ * over ~11k rows of string work.
+ */
+const facetCache = new WeakMap();
+
+function facetsOf(rows = []) {
+  if (facetCache.has(rows)) return facetCache.get(rows);
+  const by = new Map();
+  for (const f of rows) {
+    const category = String(f.category || "").trim();
+    // mapScheme's placeholder for "BSE gave no category and the name gave no clue".
+    if (!category || category === "Mutual Fund") continue;
+    if (!by.has(category)) by.set(category, new Set());
+    const sub = subCategoryOf(f);
+    if (sub && sub.toLowerCase() !== category.toLowerCase()) by.get(category).add(sub);
+  }
+  const out = [...by.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([category, subs]) => ({ category, subCategories: [...subs].sort((a, b) => a.localeCompare(b)) }));
+  facetCache.set(rows, out);
+  return out;
 }
 
 // Ek page par filter lagana jhoot tha: "Regular" chuno to 20 rows mein se 3 bachti thin
@@ -69,7 +96,9 @@ const COLD_WAIT_MS = 2500;
 // A partial index is served but re-tried on this cadence instead of the full TTL.
 const PARTIAL_RETRY_MS = 5 * 60 * 1000;
 
-let master = { at: 0, list: [], fields: [] };
+// Dev only: a recorded copy of the live catalogue (devSnapshot.js) stands in for the index.
+// null — so this is the plain empty index — unless MF_DEV_CATALOGUE_SNAPSHOT is set.
+let master = snapshotMaster() || { at: 0, list: [], fields: [] };
 let masterInflight = null;
 
 async function buildMaster(controller) {
@@ -181,16 +210,21 @@ async function coldPage(controller, q, start, length) {
     fields: rows.length ? Object.keys(rows[0]) : [],
     sample: null,
     warming: true,
+    // One BSE page is not the catalogue's vocabulary; the filter waits for the real index.
+    facets: [],
   };
 }
 
 async function getCatalogue(controller, q = {}) {
-  if (!controller.accessToken) {
+  // Dev only — the snapshot is the index, so there is no BSE login to wait 21s on.
+  const snap = snapshotMaster();
+  if (snap) master = snap;
+  else if (!controller.accessToken) {
     const login = await controller.loginFunc();
     // ponytail: login ki wajah warna gum ho jati thi aur upar sirf 502 dikhta tha
     if (login?.status === 'error') console.error('[BSE] login failed:', login.message);
   }
-  if (!controller.accessToken) {
+  if (!snap && !controller.accessToken) {
     return AMFI_FALLBACK ? amfiCatalogue(q) : { list: [], total: 0, unpriced: 0 };
   }
 
@@ -260,6 +294,7 @@ async function getCatalogue(controller, q = {}) {
     list,
     total,
     enrichment: enrichmentStats(),
+    facets: facetsOf(index.list),
     unpriced: shown.length - priced.length,
     priced: priced.length,
     fetched: index.list.length,
@@ -304,7 +339,16 @@ const TXN_FILTERS = {
   // sits on the same index row as `txn`.
   idcw_payout: (f) => f.payout === "IDCW Payout",
   idcw_reinvest: (f) => f.payout === "IDCW Reinvestment",
+  // Audit #11 — Search's Growth / ETF tags ride the same AND-combined list. Growth is the
+  // scheme option, like the two IDCW keys; ETF is in the scheme's own name, where SEBI's
+  // naming rules put it.
+  growth: (f) => f.payout === "Growth",
+  etf: (f) => /\betf\b|exchange traded/i.test(f.name || ""),
 };
+
+// Audit #11 — collections that ARE a ranking: they rank by 3Y return unless the investor
+// picked another order (see matchesCategory for what qualifies).
+const RANKED_COLLECTIONS = new Set(["high_return", "5_star_funds"]);
 
 // Ranking. Only metrics that are actually on an index row — returns/age/rating arrive from
 // the enrichment warm pass, the rest are BSE's own. Nulls always sink to the bottom in both
@@ -363,13 +407,21 @@ function query(
     returnPeriod = "1Y",
     sort = "",
     order = "desc",
+    schemeCategory = "",
+    subCategory = "",
     start = 0,
     length = 20,
   } = {}
 ) {
   let rows = list;
   const code = String(isin || scheme_code || "").trim().toUpperCase();
-  if (code) {
+  // Audit #1 — BSE files a scheme's IDCW payout and reinvestment options under one ISIN, so
+  // a caller holding the exact code (the Invest and SIP pages do) gets THAT row, not every
+  // row sharing its ISIN — which used to hand back whichever option came first.
+  const exactCode = String(scheme_code || "").trim().toUpperCase();
+  const exact = exactCode ? rows.filter((f) => String(f.scheme_bse_code || "").toUpperCase() === exactCode) : [];
+  if (exact.length) rows = exact;
+  else if (code) {
     rows = rows.filter(
       (f) =>
         String(f.scheme_isin || "").toUpperCase() === code ||
@@ -377,6 +429,11 @@ function query(
     );
   }
   if (category) rows = rows.filter((f) => matchesCategory(f, category));
+  // Audit #11 — the catalogue's own classification, exactly as `facets` offers it.
+  const cat = String(schemeCategory || "").trim().toLowerCase();
+  if (cat) rows = rows.filter((f) => String(f.category || "").toLowerCase() === cat);
+  const sub = String(subCategory || "").trim().toLowerCase();
+  if (sub) rows = rows.filter((f) => String(subCategoryOf(f) || "").toLowerCase() === sub);
   if (plan) rows = rows.filter((f) => String(f.plan || "").toLowerCase() === plan);
   if (sip in YESNO) rows = rows.filter((f) => f.sip_allowed === YESNO[sip]);
   if (mode === "physical") rows = rows.filter((f) => f.holding_modes?.physical === true);
@@ -412,6 +469,7 @@ function query(
     });
   }
   if (sort) rows = sortRows(rows, sort, order);
+  else if (RANKED_COLLECTIONS.has(category)) rows = sortRows(rows, "returns_3y", "desc");
   return { total: rows.length, lists: rows.slice(start, start + length) };
 }
 
@@ -515,4 +573,4 @@ function categoryRanking(scheme = {}, list = master.list) {
   return { categoryAvg, rank, peers: peers.length, rankedOf: out, categoryLabel: label };
 }
 
-module.exports = { getCatalogue, query, warmCatalogue, schemeCategories, categoryRanking, AMFI_FALLBACK };
+module.exports = { getCatalogue, query, facetsOf, warmCatalogue, schemeCategories, categoryRanking, AMFI_FALLBACK };

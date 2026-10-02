@@ -1,8 +1,31 @@
 const StarMFController = require("../../controllers/StarMFController");
 const { requireInvestor, requireMatchingUcc } = require("../../middleware/requireInvestor");
 const router = require("express").Router();
+// Stateless public calculation; no investor book or credentials are exposed.
+router.post('/allocation-review', async (req, res, next) => {
+  try {
+    const { RISK_PROFILES, LIFE_STAGES, reviewedPlan } = await import('../../mf/allocation.mjs');
+    const input = req.body || {};
+    if (!RISK_PROFILES.includes(input.risk) || !LIFE_STAGES.some(([id]) => id === input.lifeStage)
+      || !Number.isFinite(input.horizonYears) || input.horizonYears < 1 || input.horizonYears > 60
+      || !Number.isFinite(input.monthlyAmount) || input.monthlyAmount < 0 || input.monthlyAmount > 1e9) {
+      return res.status(422).json({ status: false, message: 'Invalid allocation inputs.' });
+    }
+    return res.json({ status: true, data: reviewedPlan(input) });
+  } catch (error) { next(error); }
+});
 
 const auth = [requireInvestor, requireMatchingUcc];
+router.post('/nav-quotes', async (req, res, next) => {
+  const isins = req.body?.isins;
+  if (!Array.isArray(isins) || !isins.length || isins.length > 20 || !isins.every((isin) => /^IN[A-Z0-9]{10}$/.test(isin))) {
+    return res.status(422).json({ status: false, message: 'Supply 1–20 valid scheme ISINs.' });
+  }
+  try {
+    const snapshot = await require('../../mf/navStore').getNavs(StarMFController);
+    return res.json({ status: true, data: Object.fromEntries(isins.map((isin) => [isin, snapshot.navs[isin] || null])) });
+  } catch (error) { next(error); }
+});
 
 // UCC
 router.post("/v2/add_ucc", requireInvestor, StarMFController.addUcc);
@@ -40,7 +63,11 @@ router.post("/getOrder", ...auth, StarMFController.getOrder);
 router.post("/getClientPortfolio", requireInvestor, StarMFController.getClientPortfolio);
 // Same BSE endpoint as getClientPortfolio, opposite intent: every order, every status.
 router.post("/orderHistory", requireInvestor, StarMFController.orderHistory);
+// Audit #62 — volatility, Sharpe, drawdown, VaR and beta for the investor's whole portfolio.
+router.post("/portfolio-metrics", requireInvestor, require("../../mf/portfolioMetrics").portfolioMetricsHandler);
 router.post("/cancelPurchaseOrder", ...auth, StarMFController.cancelPurchaseOrder);
+// Audit #11 — one lump sum across a basket's funds, each leg through /purchaseNewOrder's gates.
+router.post("/basketCheckout", ...auth, StarMFController.basketCheckout);
 
 // Payments
 router.post("/listPaymentDetail", ...auth, StarMFController.listPaymentDetail);
@@ -101,6 +128,8 @@ router.post("/linkMandate", ...auth, StarMFController.linkMandate);
 router.post("/mandateDelink", ...auth, StarMFController.mandateDelink);
 router.post("/updateMandate", ...auth, StarMFController.updateMandate);
 router.post("/mandate_register/upi-autopay", ...auth, StarMFController.mandateRegisterUpiAutoPay);
+// Audit #22 — the investor's mandates with BSE's current status (no cron; read on view).
+router.post("/mandateStatus", ...auth, StarMFController.mandateStatus);
 
 router.get("/test-api", StarMFController.testAPI);
 

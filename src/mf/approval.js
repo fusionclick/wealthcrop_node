@@ -105,6 +105,11 @@ async function checkApproval(req, intent) {
         scheme_code: intent.scheme_code,
         scheme_name: intent.scheme_name || "",
         amount,
+        // Audit #49 — the order's own details, so an approved order can be placed again with
+        // one click instead of being re-typed; and, on that click, which approval it spends.
+        // JSON drops them when absent, so every other caller sends what it always sent.
+        intent: intent.intent,
+        approval_id: intent.approval_id,
       },
       {
         timeout: 10000,

@@ -139,12 +139,40 @@ function validateSxp(input = {}, { minSip = 500, available = null } = {}) {
 // signature keeps working unchanged.
 const validateSip = (input, opts) => validateSxp({ sxp_type: "sip", ...input }, opts);
 
+// A redemption, switch-out, STP-out or SWP takes units OFF a folio; everything else adds them.
+// Same reading getClientPortfolio and lockin.js already give order_list rows.
+const SELL = /^(r|redeem|redemption|sw|sw[\s_-]*out|switch[\s_-]*out|stp[\s_-]*out|swp)$/i;
+
+/**
+ * What is left in a folio after its sells — order_list rows, already narrowed to one folio.
+ * Units by default; `field = "amount"` gives the net rupees invested the same way.
+ */
+const netUnits = (rows = [], field = "units") =>
+  rows.reduce(
+    (sum, o) => sum + (SELL.test(String(o?.trxn_type || o?.order_type || "").trim()) ? -1 : 1) * (Math.abs(Number(o?.[field])) || 0),
+    0
+  );
+
+/**
+ * Audit #18 — an SWP instalment worth more than the whole folio cannot be paid even once.
+ *
+ * `worth` is units held × today's NAV. Unknown (null/0) is not a reason to refuse: BSE checks
+ * every instalment against the folio anyway, and a missing NAV must never block an exit.
+ */
+function swpOverValue(amount, worth) {
+  const a = Number(amount);
+  const w = Number(worth);
+  if (!(a > 0) || !(w > 0) || a <= w) return null;
+  const inr = (n) => `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+  return `Each SWP instalment (${inr(a)}) is more than this holding is worth today (${inr(w)}). Choose a smaller amount.`;
+}
+
 /**
  * @param input  browser intent: sxp_type, scheme, dest_scheme, folio, amount/units, freq,
  *               txn_date, start_date, end_date
  * @param ctx    ucc + memberCode from the session, dp/client id from stored KYC, email
  */
-function buildXspRegisterPayload(input = {}, { ucc, memberCode, email, dpId, clientId } = {}) {
+function buildXspRegisterPayload(input = {}, { ucc, memberCode, email, dpId, clientId, mandateId, refId } = {}) {
   const type = sxpTypeOf(input) || "sip";
   const freq = String(input.freq || "m");
   const start = isoDay(input.start_date);
@@ -162,7 +190,7 @@ function buildXspRegisterPayload(input = {}, { ucc, memberCode, email, dpId, cli
 
   const data = {
     sxp_type: type,
-    mem_sxp_ref_id: `${LABEL[type]}${Date.now()}`,
+    mem_sxp_ref_id: refId || `${LABEL[type]}${Date.now()}`,
     investor: { ucc },
     member: String(memberCode),
     src_scheme: String(input.scheme).trim(),
@@ -188,6 +216,11 @@ function buildXspRegisterPayload(input = {}, { ucc, memberCode, email, dpId, cli
     ...(email ? { email } : {}),
     ...(end ? { end_date: end } : {}),
     ...(hasDp ? { depository_acct: { depository: "C", dp_id: dp, client_id: client } } : {}),
+    // Audit #22 — the investor's own approved mandate pays this SIP. `exch_mandate_id` is in
+    // xspRequestData's template; it is sent only when the caller has verified the mandate is
+    // this investor's, so every registration without one goes out exactly as it did before.
+    // NEEDS VERIFICATION on the whitelisted host: the template names it, no live call has.
+    ...(Number(mandateId) > 0 ? { exch_mandate_id: Number(mandateId) } : {}),
     // ── No mem_details here, and that is a finding, not an omission ──────────────────────
     // A SIP registration ought to carry the same execution-only declaration a one-off order
     // does. BSE StarMF v2 has nowhere to put it. Probed live against the exchange on
@@ -275,13 +308,13 @@ function buildResumeXspPayload(regNo, { reason = "" } = {}) {
  * parent's amount, dates and frequency are never touched here — which is exactly what
  * "existing SIP details must remain unchanged except for the configured Top-Up" asks for.
  */
-function buildTopupXspPayload(regNo, input = {}, { email } = {}) {
+function buildTopupXspPayload(regNo, input = {}, { email, refId } = {}) {
   const start = isoDay(input.start_date);
   const end = isoDay(input.end_date);
   return {
     data: {
       reg_num: String(regNo), // reg_num, not reg_no — BSE's spelling on this endpoint only
-      mem_sxp_ref_id: `TOP${Date.now()}`,
+      mem_sxp_ref_id: refId || `TOP${Date.now()}`,
       amount: Number(input.amount),
       cur: "INR",
       ...(start ? { start_date: start } : {}),
@@ -383,4 +416,6 @@ module.exports = {
   validateTopup,
   mergeSipChanges,
   CANCEL_BY_INVESTOR,
+  netUnits,
+  swpOverValue,
 };

@@ -1,20 +1,23 @@
-const { configData, IS_BSE_DEMO } = require("../config");
+const { configData, IS_BSE_DEMO, bseHttpsAgent } = require("../config");
 const axios = require("axios");
-const https = require("https");
 const StarMFService = require("bse-starmfv2-sdk");
-const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache, schemeTransactions, returnsBoth, rollingReturns, alphaBeta, lockInFromYears } = require("../mf/scheme");
-const { getEnrichment } = require("../mf/kuvera");
+const { isTransactable, mapScheme, pickScheme, navLookup, calcReturns, buildChartSeries, fundProfile, ratiosFromSeries, parseListQuery, listCacheKey, getListCache, setListCache, schemeTransactions, returnsBoth, rollingReturns, alphaBeta, lockInFromYears, effectiveLockIn, minSources } = require("../mf/scheme");
+// Dev only (Audit #1-#11 demo): inert unless MF_DEV_CATALOGUE_SNAPSHOT is set.
+const { snapshotScheme } = require("../mf/devSnapshot");
+const { getEnrichment, documentsUrl } = require("../mf/kuvera");
 const { redemptionVerdict } = require("../mf/lockin");
-const { benchmarkSeries, benchmarkFor } = require("../mf/benchmark");
+const { benchmarkSeries, benchmarkFor, resolveBenchmark } = require("../mf/benchmark");
 const { loadFundNav } = require("../mf/mfapi");
 const { getNavs, navFor, navDateFor, navLooksPlausible } = require("../mf/navStore");
 const { getCatalogue, schemeCategories, categoryRanking, AMFI_FALLBACK } = require("../mf/catalogue");
 const { getHidden, isHidden } = require("../mf/hidden");
 const { getAmfiNavs } = require("../mf/amfiNav");
-const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE } = require("../mf/order");
+const { bindUcc, validateOrder, checkSchemeLimits, twoFaUccPayload, normalizeOrder, investorUcc, investorMobile, normalizeMobile, BSE_PLACEHOLDER_MOBILE, switchRefusal, panVerified, PAN_NOT_VERIFIED, buildCancelOrderPayload } = require("../mf/order");
 const { kycFromUcc, uccPan, investorPan } = require("../mf/kyc");
 const { pdfLines, parseCas, casHoldings } = require("../mf/cas");
-const { answer: qaAnswer } = require("../mf/qaFixtures");
+const { answer: qaAnswer, qaScheme } = require("../mf/qaFixtures");
+const { MODES: MANDATE_MODES, validVpa, buildMandateRegisterPayload, mandateOutcome, recordMandate, storedMandates } = require("../mf/mandate");
+const { splitByWeight, basketPlan } = require("../mf/basket");
 const {
   buildXspRegisterPayload,
   validateSip,
@@ -27,24 +30,26 @@ const {
   buildTopupXspPayload,
   validateTopup,
   mergeSipChanges,
+  netUnits,
+  swpOverValue,
 } = require("../mf/xsp");
 const { checkSuitability, checkDisclaimers, DISCLAIMERS, REQUIRED_ACKS, LEGAL_ENTITY, DISTRIBUTOR_ARN } = require("../mf/suitability");
 
 // AMFI compliance spec §1.B and §2. The version is what the consent log stores, so it is
 // declared once here and travels with the text to the browser; bump it whenever the wording
 // of anything in REQUIRED_ACKS changes, and never reuse a version.
-const CONSENT_TEXT_VERSION = process.env.CONSENT_TEXT_VERSION || "2026.09";
+const CONSENT_TEXT_VERSION = process.env.CONSENT_TEXT_VERSION || "2026.10";
 const COMMISSION_VERSION = process.env.COMMISSION_STRUCTURE_VERSION || "2026.09";
 // An empty URL renders no link rather than a dead one: a broken commission link is worse
 // than a missing one, because it looks like disclosure and is not.
 const COMMISSION_URL = String(process.env.COMMISSION_STRUCTURE_URL || "").trim();
 const { memDetails, assertEuinSane } = require("../mf/euin");
 const { recordConsents } = require("../mf/consent");
-const { getDistributor } = require("../mf/distributor");
+const { getDistributor, cachedDistributor } = require("../mf/distributor");
 const { getRiskPolicy } = require("../mf/riskPolicy");
 const { checkApproval } = require("../mf/approval");
 const { getLimits, applyFloor } = require("../mf/platformLimits");
-const { storedOrders, orderKey } = require("../mf/storedOrders");
+const { storedOrders, orderKey, statusChanges, reportStatusChanges, recordOrder } = require("../mf/storedOrders");
 const { getHoldings } = require("../mf/holdings");
 const { mapBseErrors } = require("../mf/bseFieldErrors");
 const orderRequestData = require("../requestData/orderRequestData");
@@ -52,7 +57,6 @@ const nftRequestData = require("../requestData/nftRequestData");
 const schemeRequestData = require("../requestData/schemeRequestData");
 const paymentRequestData = require("../requestData/paymentRequestData");
 const fetch2FALinkRequestData = require("../requestData/fetch2FALinkRequestData");
-const mandateRequestData = require("../requestData/mandateRequestData");
 const navRequestData = require("../requestData/navRequestData");
 
 // How many instalments sxp_trxn_history returns when the caller does not ask for a number.
@@ -151,11 +155,14 @@ const cell = (v) => String(v ?? "").trim();
  *   and STP their own pages, and each wants only its own rows — but they arrive from the
  *   same /sxp_list call, so the narrowing has to happen here.
  */
-const isActiveSxp = (item, want = "sip") => {
+const isActiveSxp = (item, want = "sip", { cancelled = false } = {}) => {
   const type = cell(item?.sxp_type || item?.xsp_type || item?.type);
   // STP rows come back as STP-IN / STP-OUT, so match the prefix rather than the whole word.
   if (want && type && !new RegExp(`^${want}\\b|^${want}-`, "i").test(type)) return false;
   const status = cell(item?.status || item?.sxp_status || item?.xsp_status);
+  // Audit #20 — a cancelled registration is history the investor can ask to see (Manage
+  // SIPs' Cancelled tab); dropping it here is why that tab was always empty after a refresh.
+  if (cancelled && /cancel/i.test(status)) return true;
   if (status && /cancel|close|expire|reject|fail|stop/i.test(status)) return false;
   return true;
 };
@@ -171,7 +178,7 @@ const isActiveSxp = (item, want = "sip") => {
  *   cosmetic half and is what this turns off.
  * @param type  which sxp_type to keep; null keeps every type.
  */
-const scopeXspResponse = (response, ucc, { activeOnly = true, type = "sip" } = {}) => {
+const scopeXspResponse = (response, ucc, { activeOnly = true, type = "sip", cancelled = false } = {}) => {
   const data = response?.data;
   if (!data || typeof data !== "object") return response;
   const key = Array.isArray(data.lists) ? "lists" : Array.isArray(data.items) ? "items" : null;
@@ -180,7 +187,7 @@ const scopeXspResponse = (response, ucc, { activeOnly = true, type = "sip" } = {
   const rows = data[key].filter(
     (item) =>
       [item?.ucc, item?.ucc_code, item?.client_code, item?.investor_ucc, item?.investor?.ucc, item?.investor?.client_code]
-        .some((value) => cell(value) === expected) && (!activeOnly || isActiveSxp(item, type))
+        .some((value) => cell(value) === expected) && (!activeOnly || isActiveSxp(item, type, { cancelled }))
   );
   // total_count is BSE's pre-filter number; leaving it would overstate what we returned.
   return { ...response, data: { ...data, [key]: rows, count: rows.length, total_count: rows.length } };
@@ -287,7 +294,7 @@ class StarMFController {
     // ponytail: follow BSE_BASE_URL (demo|prod) — was hardcoded demo while .env used prod
     this.bseDemoUrl = `${String(configData.baseUrl).replace(/\/$/, "")}/api`;
     this.bseToken = "";
-    this.insecureAgent = new https.Agent({ rejectUnauthorized: false });
+    this.httpsAgent = bseHttpsAgent;
     [
       this.loginService,
       this.uccService,
@@ -301,9 +308,9 @@ class StarMFController {
     ].forEach((svc) => {
       const ax = svc?.api?._axios;
       if (!ax) return;
-      ax.defaults.httpsAgent = this.insecureAgent;
+      ax.defaults.httpsAgent = this.httpsAgent;
       ax.interceptors.request.use((config) => {
-        config.httpsAgent = this.insecureAgent;
+        config.httpsAgent = this.httpsAgent;
         return config;
       });
       // ponytail: BSE ka token chup-chaap expire hota hai. Gateway 401 "Authorization
@@ -326,7 +333,7 @@ class StarMFController {
         const bearer = `Bearer ${this.accessToken}`;
         if (cfg.headers && typeof cfg.headers.set === "function") cfg.headers.set("Authorization", bearer);
         else cfg.headers = { ...(cfg.headers || {}), Authorization: bearer };
-        cfg.httpsAgent = this.insecureAgent;
+        cfg.httpsAgent = this.httpsAgent;
         return ax.request(cfg);
       });
     });
@@ -665,7 +672,7 @@ class StarMFController {
       const response = await axios.post(
         `${this.bseDemoUrl}/login`,
         { data: { username: this.username, password: this.password } },
-        { httpsAgent: this.insecureAgent, timeout: LOGIN_TIMEOUT_MS }
+        { httpsAgent: this.httpsAgent, timeout: LOGIN_TIMEOUT_MS }
       );
       const data = response.data || {};
       this.accessToken =
@@ -805,10 +812,6 @@ class StarMFController {
     return this.executeWithRetry("trxnService", serviceMethod, reqObj, res, transform);
   }
 
-  async handleMandateRequest(serviceMethod, req, res) {
-    return this.executeWithRetry("mandatteService", serviceMethod, req, res);
-  }
-
   async handlePaymentRequest(serviceMethod, reqObj, res) {
     return this.executeWithRetry("paymentService", serviceMethod, reqObj, res);
   }
@@ -845,55 +848,130 @@ class StarMFController {
     }
   };
 
-  // // Mandate Methods
-  registerMandate = async (req, res) => {
-    let reqObj = mandateRequestData.registerMandate;
-    return this.handleMandateRequest("registerMandate", reqObj, res);
-  };
+  // ── Mandates (Audit #22) ──────────────────────────────────────────────────────────────
+  // Every one of these used to send requestData's DEMO payload — someone else's UCC, mandate
+  // id 20, reg_no "reg-12345-xyz" — whatever the investor asked. They now act only on the
+  // caller's own mandates (Laravel's `mandates` rows, filed under their bearer) and SIPs.
 
-  registerMandateUPI = async (req, res) => {
-    let reqObj = mandateRequestData.registerMandateUPI;
-    return this.handleMandateRequest("registerMandateUPI", reqObj, res);
-  };
+  /** A mandate call's body, QA book first — the same rule handleTrxnRequest applies. */
+  callMandate(serviceMethod, reqObj) {
+    const canned = qaAnswer(serviceMethod, reqObj);
+    if (canned) {
+      const failure = bseFailure(canned);
+      return Promise.resolve(failure ? { status: "error", message: failure, _status: 502 } : canned);
+    }
+    return new Promise((resolve) => {
+      this.executeWithRetry("mandatteService", serviceMethod, reqObj, {
+        json: (data) => resolve(data),
+        status: (code) => ({ json: (data) => resolve({ ...data, _status: code }) }),
+      });
+    });
+  }
 
-  registerMandateEnach = async (req, res) => {
-    let reqObj = mandateRequestData.registerMandateEnach;
-    return this.handleMandateRequest("registerMandateEnach", reqObj, res);
-  };
+  /** The caller's mandate by BSE id, from their own rows — or null. */
+  async ownedMandate(req, id) {
+    const want = String(id ?? "").trim();
+    if (!want) return null;
+    return (await storedMandates(req)).find((m) => String(m.exch_mandate_id) === want) || null;
+  }
 
-  registerMandateNach = async (req, res) => {
-    let reqObj = mandateRequestData.registerMandateNach;
-    return this.handleMandateRequest("registerMandateNach", reqObj, res);
-  };
+  // The three register routes now share one server-built registration; the route only says
+  // which channel to assume when the body names none.
+  registerMandate = (req, res) => this.mandateRegisterUpiAutoPay(req, res);
+  registerMandateUPI = (req, res) => this.mandateRegisterUpiAutoPay(req, res, "upi");
+  registerMandateEnach = (req, res) => this.mandateRegisterUpiAutoPay(req, res, "netbanking");
+
+  // A physical NACH form is a scanned, signed paper mandate (`nach_scan_img` in the template).
+  // Nothing in this product captures one, so these refuse plainly instead of sending a demo image.
+  registerMandateNach = (_req, res) =>
+    res.status(501).json({ status: "error", message: "Paper NACH forms are not supported here. Use UPI AutoPay or an e-mandate." });
+  updateMandate = (_req, res) =>
+    res.status(501).json({ status: "error", message: "Updating a mandate needs a scanned NACH form, which is not supported here." });
 
   getMandate = async (req, res) => {
-    let reqObj = mandateRequestData.getMandate;
-    return this.handleMandateRequest("getMandate", reqObj, res);
+    const mine = await this.ownedMandate(req, (req.body?.data || req.body || {}).exch_mandate_id);
+    if (!mine) return res.status(404).json({ status: "error", message: "No such mandate on this account." });
+    const result = await this.callMandate("getMandate", { data: { exch_mandate_id: Number(mine.exch_mandate_id) } });
+    if (result?._status) return res.status(result._status).json({ status: "error", message: result.message });
+    return res.json(result);
   };
 
-  getAllMandate = async (req, res) => {
-    let reqObj = mandateRequestData.getAllMandate;
-    return this.handleMandateRequest("getAllMandate", reqObj, res);
-  };
+  // The investor's mandates with BSE's current status — the same answer as /mandateStatus.
+  // BSE's own mandate_list is not asked: which filter keys it accepts is unproven, and the
+  // sibling sxp_list rejects every one (see buildXspListPayload).
+  getAllMandate = (req, res) => this.mandateStatus(req, res);
 
   cancelMandate = async (req, res) => {
-    let reqObj = mandateRequestData.cancelMandate;
-    return this.handleMandateRequest("cancelMandate", reqObj, res);
+    const mine = await this.ownedMandate(req, (req.body?.data || req.body || {}).exch_mandate_id);
+    if (!mine) return res.status(404).json({ status: "error", message: "No such mandate on this account." });
+    const result = await this.callMandate("cancelMandate", {
+      data: { ids: [Number(mine.exch_mandate_id)], investor: { ucc: req.ucc } },
+    });
+    if (result?._status) return res.status(result._status).json({ status: "error", message: result.message });
+    await recordMandate(req, { exch_mandate_id: mine.exch_mandate_id, mode: mine.mode, status: "cancelled", amount: mine.amount });
+    return res.json({ status: "success", message: "Mandate cancelled." });
   };
 
   linkMandate = async (req, res) => {
-    let reqObj = mandateRequestData.linkMandate;
-    return this.handleMandateRequest("linkMandate", reqObj, res);
+    const input = req.body?.data || req.body || {};
+    const mine = await this.ownedMandate(req, input.exch_mandate_id);
+    const sip = mine && (await this.loadOwnedSip(req, input.reg_no));
+    if (!mine || !sip) return res.status(404).json({ status: "error", message: "No such mandate or SIP on this account." });
+    const linked = await this.linkMandateToSip(req, mine, xspRegNo(sip));
+    if (!linked) return res.status(502).json({ status: "error", message: "BSE did not link the mandate to this SIP." });
+    return res.json({ status: "success", message: "Mandate linked to the SIP." });
   };
 
   mandateDelink = async (req, res) => {
-    let reqObj = mandateRequestData.mandateDelink;
-    return this.handleMandateRequest("mandateDelink", reqObj, res);
+    const sip = await this.loadOwnedSip(req, (req.body?.data || req.body || {}).reg_no);
+    if (!sip) return res.status(404).json({ status: "error", message: "No such SIP on this account." });
+    const result = await this.callMandate("mandateDelink", { data: { reg_nos: [xspRegNo(sip)] } });
+    if (result?._status) return res.status(result._status).json({ status: "error", message: result.message });
+    return res.json({ status: "success", message: "Mandate unlinked from the SIP." });
   };
 
-  updateMandate = async (req, res) => {
-    let reqObj = mandateRequestData.updateMandate;
-    return this.handleMandateRequest("updateMandate", reqObj, res);
+  /** BSE link_mandate for one of the caller's SIPs, recorded in Laravel when BSE agrees. */
+  async linkMandateToSip(req, mandate, regNo) {
+    const result = await this.callMandate("linkMandate", {
+      data: { reg_no: String(regNo), exch_mandate_id: Number(mandate.exch_mandate_id) },
+    });
+    if (result?._status) return false;
+    await recordMandate(req, {
+      exch_mandate_id: mandate.exch_mandate_id,
+      mode: mandate.mode,
+      status: mandate.status,
+      amount: mandate.amount,
+      sip_reg_no: String(regNo),
+      linked: true,
+    });
+    return true;
+  }
+
+  /**
+   * The investor's mandates, each with BSE's current word on it.
+   *
+   * No cron: a pending mandate is re-read from BSE when the investor looks (Manage SIPs), and
+   * a change is filed back to Laravel, which tells the investor once. A mandate whose SIP was
+   * not yet visible to BSE when it was registered is linked here, on a later look.
+   */
+  mandateStatus = async (req, res) => {
+    const out = [];
+    for (const m of await storedMandates(req)) {
+      let row = m;
+      if (m.exch_mandate_id && m.status === "pending") {
+        const result = await this.callMandate("getMandate", { data: { exch_mandate_id: Number(m.exch_mandate_id) } });
+        const state = result?._status ? null : mandateOutcome(result).state;
+        if (state && state !== m.status) {
+          row = (await recordMandate(req, { exch_mandate_id: m.exch_mandate_id, mode: m.mode, status: state, amount: m.amount })) || { ...m, status: state };
+        }
+      }
+      if (row.exch_mandate_id && row.sip_reg_no && !row.linked && !["cancelled", "rejected"].includes(row.status)) {
+        const sip = await this.loadOwnedSip(req, row.sip_reg_no);
+        if (sip && (await this.linkMandateToSip(req, row, xspRegNo(sip)))) row = { ...row, linked: true };
+      }
+      out.push(row);
+    }
+    return res.json({ status: "success", data: { mandates: out } });
   };
 
   /**
@@ -911,19 +989,16 @@ class StarMFController {
    * purchaseNewOrder): it is the exit, and the disclaimer gate fails closed.
    */
   async gateOrder(req, rawScheme, { suitability = true, approval = null } = {}) {
-    const disclaimed = checkDisclaimers(req.body?.data || req.body || {});
+    // Audit #33 — the RM register is read from the same cache the ARN in every payload comes
+    // from (the checkout's own /disclaimers call keeps it warm); a cold cache is an empty
+    // register, so an RM-assisted order fails closed rather than trusting an unknown EUIN.
+    const disclaimed = checkDisclaimers(req.body?.data || req.body || {}, { rms: cachedDistributor().rms });
     if (!disclaimed.ok) {
       return { status: "error", code: disclaimed.code, message: disclaimed.message, required: disclaimed.required };
     }
-    // SRS §4 — a transaction at or above the configured amount is held for authorisation.
-    // It belongs in this gate, not on Laravel's order row: that row is written after BSE
-    // already has the order, so nothing reading it could stop one. Skipped entirely when
-    // the caller passes no intent, and costs nothing when the threshold is 0 (the default).
-    if (approval) {
-      const held = await checkApproval(req, approval);
-      if (held) return held;
-    }
-    if (!suitability) return null;
+    // Only ever set from the register-checked declaration; purchaseNewOrder and logConsents
+    // read it so BSE and the audit trail name the same employee.
+    req.rmEuin = disclaimed.euin || "";
     // lookupScheme hands back BSE's raw master row, which carries a category but no SEBI
     // riskometer level — BSE's master has no such column. Map it, then ask the enrichment
     // source for the level, exactly as the fund page does. Fail-open there means the
@@ -944,39 +1019,56 @@ class StarMFController {
     // Ticket 23 — the ceilings come from the admin panel. Awaited here, at the one place
     // every order path already funnels through, so a compliance change takes effect within
     // the cache TTL and no caller has to remember to load it.
-    const suitable = checkSuitability(req.investor, scheme, await getRiskPolicy());
+    const suitable = suitability ? checkSuitability(req.investor, scheme, await getRiskPolicy()) : { ok: true };
     if (!suitable.ok) {
       return { status: "error", code: suitable.code, message: suitable.message };
     }
-    await this.logConsents(req, approval, scheme);
+    // SRS §4 — a transaction at or above the configured amount is held for authorisation.
+    // It belongs in this gate, not on Laravel's order row: that row is written after BSE
+    // already has the order, so nothing reading it could stop one. Skipped entirely when
+    // the caller passes no intent, and costs nothing when the threshold is 0 (the default).
+    // Audit #49 — asked only once every other gate has passed: an approval is spent the
+    // moment it is checked, so asking first spent "Place now" clearances (and queued admin
+    // requests) on orders suitability was about to refuse anyway. Only buys are ever held.
+    // Persist before consuming a one-use approval or contacting the exchange.
+    const body = req.body?.data || req.body || {};
+    req.consentRef = String(body.mem_ord_ref_id || body.orders?.[0]?.mem_ord_ref_id || body.mem_sxp_ref_id || require("crypto").randomBytes(8).toString("hex").toUpperCase());
+    if (!(await this.logConsents(req, approval, scheme))) {
+      return { status: "error", code: "consent_unavailable", httpStatus: 503,
+        message: "Your consent could not be saved. Nothing has been submitted; please try again." };
+    }
+    if (approval) {
+      const held = await checkApproval(req, approval);
+      if (held) return held;
+    }
     return null;
   }
 
   /**
-   * §2 — write the consent trail for an order that has just cleared every gate.
+   * §2 — persist the authorised instruction before exchange submission and approval use.
    *
-   * Deliberately the LAST thing gateOrder does: a refused order has no consent to record,
-   * because nothing was placed. Awaited rather than fired and forgotten, so a slow Laravel
-   * shows up as a slow checkout instead of as silently missing audit rows.
-   *
-   * The EUIN pair written here comes from the same memDetails() that builds the outgoing
-   * payload, not from a copy of it — so the audit trail cannot describe a declaration
-   * different from the one the exchange received.
+   * The EUIN pair comes from the same memDetails() used by order_new. SXP/mandate APIs
+   * have no verified declaration field; their authorised instruction is retained locally.
    */
   async logConsents(req, approval, scheme) {
     const body = req.body?.data || req.body || {};
-    const orderId = String(body.mem_ord_ref_id || body.mem_sxp_ref_id || "").slice(0, 64) || null;
-    const schemeCode = String(approval?.scheme_code || scheme?.scheme_bse_code || "").trim();
-    const sent = memDetails();
+    // The same reference is passed into the order/SXP payload builder.
+    const orderId =
+      String(req.consentRef || "").slice(0, 64) || null;
+    const schemeCode = String(approval?.scheme_code || scheme?.scheme_bse_code || body.scheme || body.src_scheme || "").trim();
+    const sent = memDetails({ euin: req.rmEuin });
 
-    await recordConsents(req, [
+    return recordConsents(req, [
       {
-        type: "execution_only",
+        // §2 rows 1/2 — whichever declaration the order actually carries to BSE.
+        type: sent.euin ? "rm_assisted" : "execution_only",
         order_id: orderId,
         euin_number: sent.euin || null,
         euin_declared: sent.euin_flag === true,
       },
-      { type: "regular_plan_commission", order_id: orderId, commission_version: COMMISSION_VERSION },
+      // The table the investor was shown — null while no AMC-wise rates are published,
+      // rather than a version number nothing stands behind.
+      { type: "regular_plan_commission", order_id: orderId, commission_version: cachedDistributor().commission_version || null },
       { type: "scheme_documents", order_id: orderId, scheme_codes: schemeCode ? [schemeCode] : [] },
     ]);
   }
@@ -997,7 +1089,9 @@ class StarMFController {
     // whatever the panel says rather than the env value this process booted with.
     const disclaimers = { ...DISCLAIMERS };
     if (dist.legal_entity && dist.legal_entity !== LEGAL_ENTITY) {
-      disclaimers.execution_only = DISCLAIMERS.execution_only.split(LEGAL_ENTITY).join(dist.legal_entity);
+      for (const key of ["execution_only", "rm_assisted"]) {
+        disclaimers[key] = DISCLAIMERS[key].split(LEGAL_ENTITY).join(dist.legal_entity);
+      }
     }
     return res.json({
       status: "success",
@@ -1014,10 +1108,14 @@ class StarMFController {
           arn: dist.arn,
           line: dist.line,
         },
-        // §1.B — the commission structure must be a FUNCTIONAL hyperlink at checkout, so it
-        // is only offered once something is actually published behind it.
+        // §1.B — the commission structure must be a FUNCTIONAL hyperlink at checkout.
+        // Audit #32 — the page is always linked (it says plainly when rates are not yet
+        // published); `commission_published` tells the checkout which of the two it is.
         commission_url: dist.commission_url || COMMISSION_URL,
         commission_structure_version: dist.commission_version || COMMISSION_VERSION,
+        commission_published: Boolean(dist.commission_version),
+        // Audit #33 — the RM register the checkout offers as "assisted by" (EUIN + name).
+        rms: dist.rms || [],
       },
     });
   };
@@ -1148,6 +1246,11 @@ class StarMFController {
     const type = sxpTypeOf(input);
     if (!type) return res.status(400).json({ status: "error", message: "Choose a valid instruction type" });
 
+    // Audit #42 — an SWP pays money out, so like a redemption it waits for a verified PAN.
+    if (type === "swp" && !panVerified(req.investor)) {
+      return res.status(403).json({ status: "error", code: "pan_not_verified", message: PAN_NOT_VERIFIED });
+    }
+
     // Ticket 18: "available units/balance must be validated". The holding is BSE's word,
     // not the browser's — a page that believes it holds 900 units does not make it so.
     let available = null;
@@ -1163,6 +1266,26 @@ class StarMFController {
 
     const invalid = validateSxp({ ...input, sxp_type: type, scheme }, { available });
     if (invalid) return res.status(400).json({ status: "error", message: invalid });
+
+    // Audit #18 — the browser always sends rupees, and units alone said nothing about them:
+    // an instalment worth more than the whole folio was registered and failed at BSE every
+    // month. Judged on units held × today's NAV; unknown value lets it through to BSE.
+    if (type === "swp" && input.isunits !== true && input.all_units !== true) {
+      const worth = await this.folioValue(ucc, scheme, input.folio || input.src_folio, available);
+      const over = swpOverValue(input.amount, worth);
+      if (over) return res.status(400).json({ status: "error", code: "swp_exceeds_holding", message: over });
+    }
+
+    // Audit #22 — a SIP may name the investor's own ACTIVE mandate to pay it. Checked against
+    // their Laravel rows: a mandate id is BSE's, and naming somebody else's must not work.
+    let mandateId = null;
+    if (type === "sip" && Number(input.exch_mandate_id) > 0) {
+      const mine = await this.ownedMandate(req, input.exch_mandate_id);
+      if (mine?.status !== "approved") {
+        return res.status(400).json({ status: "error", message: "That auto-debit mandate is not active on your account." });
+      }
+      mandateId = Number(mine.exch_mandate_id);
+    }
 
     // QA 13.7 — the admin's Min SIP. A SIP only: an STP moves money that is already
     // invested and a SWP takes it out, so a house minimum on contributions says nothing
@@ -1190,11 +1313,24 @@ class StarMFController {
         : {
             kind: type,
             scheme_code: String(type === "stp" ? input.dest_scheme : scheme),
-            scheme_name: mapScheme(target || {})?.scheme_name || "",
+            // mapScheme names it `name`; `scheme_name` was never set, so every held
+            // request reached the admin with a blank fund name.
+            scheme_name: mapScheme(target || {})?.name || "",
             amount: Number(input.amount) || 0,
+            // Audit #49 — enough to place this again from Orders once it is approved.
+            intent: {
+              sxp_type: type,
+              scheme,
+              ...(type === "stp" ? { dest_scheme: String(input.dest_scheme || ""), folio: String(input.folio || input.src_folio || "") } : {}),
+              amount: Number(input.amount) || 0,
+              freq: String(input.freq || "m"),
+              start_date: input.start_date || null,
+              end_date: input.end_date || null,
+            },
+            approval_id: input.approval_id,
           },
     });
-    if (gate) return res.status(403).json(gate);
+    if (gate) return res.status(gate.httpStatus || 403).json(gate);
 
     const kyc = req.investor?.kyc || {};
     const reqObj = buildXspRegisterPayload(
@@ -1205,6 +1341,8 @@ class StarMFController {
         email: req.investor?.email || "",
         dpId: kyc.dp_id,
         clientId: kyc.client_id,
+        mandateId,
+        refId: req.consentRef,
       }
     );
     return this.handleTrxnRequest("xspRegister", reqObj, res);
@@ -1214,9 +1352,12 @@ class StarMFController {
     // SIP unless asked otherwise, so every existing caller keeps the list it had. The SWP
     // and STP pages ask for their own type; /sxp_list cannot filter, so this does.
     const type = sxpTypeOf({ sxp_type: req.body?.data?.sxp_type || req.body?.sxp_type }) || "sip";
+    // Audit #20 — only Manage SIPs asks for cancelled registrations (its Cancelled tab); the
+    // dashboard count and every other reader keep getting live rows only.
+    const cancelled = (req.body?.data?.include_cancelled ?? req.body?.include_cancelled) === true;
     const reqObj = buildXspListPayload(req.body?.data, ucc);
     return this.handleTrxnRequest("getAllXsp", reqObj, res, (response) =>
-      scopeXspResponse(response, ucc, { type })
+      scopeXspResponse(response, ucc, { type, cancelled })
     );
   };
 
@@ -1366,9 +1507,15 @@ class StarMFController {
       const limits = await this.sipLimitsFor(sip.src_scheme || sip.scheme || input.scheme);
       const invalid = validateTopup(input, limits);
       if (invalid) return res.status(400).json({ status: "error", message: invalid });
+      // Audit #32 — a top-up puts more money into the scheme, so it takes the same gates as
+      // the registration it extends (disclaimers, suitability, consent trail). It skipped
+      // them all, which made /topupXsp the one buy that needed no acknowledgement. Judged on
+      // BSE's own row for this SIP, never on a scheme the browser names.
+      const gate = await this.gateOrder(req, await this.lookupScheme(sip.src_scheme || sip.scheme));
+      if (gate) return res.status(gate.httpStatus || 403).json(gate);
       return this.handleTrxnRequest(
         "topupXsp",
-        buildTopupXspPayload(regNo, input, { email: req.investor?.email || "" }),
+        buildTopupXspPayload(regNo, input, { email: req.investor?.email || "", refId: req.consentRef }),
         res
       );
     });
@@ -1397,7 +1544,7 @@ class StarMFController {
       // A modification registers a fresh SIP, so it is a new purchase instruction and takes
       // the same gates. Skipping it here would make /modifyXsp the way around them.
       const gate = await this.gateOrder(req, await this.lookupScheme(intent.scheme));
-      if (gate) return res.status(403).json(gate);
+      if (gate) return res.status(gate.httpStatus || 403).json(gate);
 
       const kyc = req.investor?.kyc || {};
       const registered = await this.callTrxn(
@@ -1408,6 +1555,7 @@ class StarMFController {
           email: req.investor?.email || "",
           dpId: kyc.dp_id,
           clientId: kyc.client_id,
+          refId: req.consentRef,
         })
       );
       if (registered?._status) {
@@ -1470,12 +1618,19 @@ class StarMFController {
     if (!parsed.ok) {
       return res.status(400).json({ status: "error", message: parsed.error });
     }
+    // Audit #42 — a redemption pays money out, so it waits for a verified PAN. The browser's
+    // KYC check was the only gate, and a direct call walked past it.
+    if (String(parsed.order.type || "").toLowerCase() === "r" && !panVerified(req.investor)) {
+      return res.status(403).json({ status: "error", code: "pan_not_verified", message: PAN_NOT_VERIFIED });
+    }
     // Admin ne scheme chhupayi ho to nayi purchase nahi — list se hatana kaafi nahi,
     // purana buy link kaam karta rehta. Redemption par ye guard nahi lagta: chhupi hui
     // scheme mein pade units nikalne se kabhi nahi roka jata.
-    if (String(parsed.order.type || "").toLowerCase() === "p") {
+    // Audit #46 — a switch BUYS its destination, so a hidden destination is refused too.
+    const buying = String(parsed.order.type || "").toLowerCase();
+    if (buying === "p" || buying === "sw") {
       const hidden = await getHidden();
-      if (isHidden(hidden, { scheme_bse_code: parsed.order.scheme })) {
+      if (isHidden(hidden, { scheme_bse_code: buying === "sw" ? parsed.order.dest_scheme : parsed.order.scheme })) {
         return res.status(403).json({
           status: "error",
           message: "This scheme is not available for investment.",
@@ -1506,17 +1661,36 @@ class StarMFController {
     const orderType = String(parsed.order.type || "").toLowerCase();
     if (orderType === "p" || orderType === "sw") {
       const target = orderType === "sw" ? await this.lookupScheme(parsed.order.dest_scheme) : scheme;
+      // Audit #46 — same fund house, switch allowed out of the source and into the
+      // destination, destination open for investment. All of it used to be left to BSE.
+      if (orderType === "sw") {
+        const refusal = switchRefusal(scheme, target);
+        if (refusal) return res.status(400).json({ status: "error", code: "switch_not_allowed", message: refusal });
+      }
       // SRS §4 — the amount that would leave the investor's bank is what a threshold is
       // about, so it is judged on the order's own amount, against the scheme being bought.
       const gate = await this.gateOrder(req, target, {
         approval: {
           kind: orderType === "sw" ? "switch" : "purchase",
           scheme_code: String(orderType === "sw" ? parsed.order.dest_scheme : parsed.order.scheme || ""),
-          scheme_name: mapScheme(target || {})?.scheme_name || "",
+          // `name` is what mapScheme returns; `scheme_name` was never set (see xspRegister).
+          scheme_name: mapScheme(target || {})?.name || "",
           amount: Number(parsed.order.amount) || 0,
+          // Audit #49 — what to place again from Orders once an admin approves it.
+          intent:
+            orderType === "sw"
+              ? {
+                  scheme: String(parsed.order.scheme),
+                  dest_scheme: String(parsed.order.dest_scheme),
+                  folio: String(parsed.order.folio || ""),
+                  amount: Number(parsed.order.amount) || 0,
+                  all_units: Boolean(parsed.order.all_units),
+                }
+              : { scheme: String(parsed.order.scheme), amount: Number(parsed.order.amount) || 0 },
+          approval_id: req.body?.data?.approval_id,
         },
       });
-      if (gate) return res.status(403).json(gate);
+      if (gate) return res.status(gate.httpStatus || 403).json(gate);
     }
     // QA 3.8 — the same lock-in the browser refuses, refused where a direct API call cannot
     // walk around it. A switch counts: it SELLS the source folio, so the source is what is
@@ -1555,8 +1729,10 @@ class StarMFController {
     // frontend bheje, mode DP par, aur koi pre-flight guard nahi. Resolved code aur
     // allowedModes ne isay tor diya tha; BSE ko khud faisla karne do.
     const normalized = normalizeOrder(
-      { ...parsed.order, depository_acct: dp || {} },
-      { ucc, memberCode: this.memberCode, mobile }
+      { ...parsed.order, ...(req.consentRef ? { mem_ord_ref_id: req.consentRef } : {}), depository_acct: dp || {} },
+      // Audit #33 — set only by gateOrder, from the register-checked RM declaration; a
+      // redemption never passes the gate, so it stays execution-only as before.
+      { ucc, memberCode: this.memberCode, mobile, euin: req.rmEuin || "" }
     );
     const reqObj = { data: { orders: [normalized] } };
     return this.handleTrxnRequest("purchaseNewOrder", reqObj, res);
@@ -1600,7 +1776,26 @@ class StarMFController {
     const mine = await this.heldRows(ucc, schemeCode, folio);
     if (mine === null) return null;
     // No matching row is a real answer — nothing is held here — unlike an unreadable list.
-    return mine.reduce((sum, o) => sum + (Number(o.units) || 0), 0);
+    // Audit #18 — net of what was sold. Adding every row counted a redemption's units as
+    // still held (QA1000002 read 523.867 units for the 366.697 the portfolio shows).
+    return Math.max(0, Math.round(netUnits(mine) * 1000) / 1000);
+  }
+
+  /**
+   * Audit #18 — what a folio is worth today: units held × the AMFI NAV the portfolio values it
+   * at, behind the same plausibility check (a neighbouring plan's NAV must not refuse anything).
+   * null whenever a part is unknown — a missing price is never a reason to stop a withdrawal.
+   */
+  async folioValue(ucc, schemeCode, folio, units) {
+    if (!(Number(units) > 0)) return null;
+    const rows = await this.heldRows(ucc, schemeCode, folio);
+    if (!rows?.length) return null;
+    const isin = rows.map((o) => o.scheme_isin).find(Boolean) || "";
+    const invested = netUnits(rows, "amount");
+    const { navs } = (await getNavs(this).catch(() => null)) || {};
+    const nav = navs ? navFor(navs, isin, schemeCode) : null;
+    if (!navLooksPlausible(invested, units, nav)) return null;
+    return Math.round(Number(units) * nav * 100) / 100;
   }
 
   /**
@@ -1852,7 +2047,19 @@ class StarMFController {
       // Merged here rather than in either page: both already call this endpoint, so the
       // fix lands once instead of twice, and every future caller inherits it.
       const stored = await storedOrders(req);
+      // Audit #48 — status sync without a cron. BSE has just said where each order stands, so
+      // any stored order it has settled (allotted / rejected / cancelled) is reported to
+      // Laravel, which records it and tells the investor once per change. Not awaited: a page
+      // load must not wait on an email being sent.
+      reportStatusChanges(req, statusChanges(stored, orders)).catch(() => {});
       const known = new Set(orders.map((o) => orderKey(o)));
+      const storedById = new Map(stored.filter((r) => r.id != null).map((r) => [String(r.id), r]));
+      for (const o of orders) {
+        // A row BSE names only by its scheme code takes the name the investor saw when it
+        // was placed, which Laravel kept (Audit #11: a basket leg read as a bare code).
+        const mine = storedById.get(String(o.id));
+        if (mine?.scheme_name && (!o.scheme_name || o.scheme_name === o.scheme_bse_code)) o.scheme_name = mine.scheme_name;
+      }
       for (const row of stored) {
         if (!known.has(orderKey(row))) orders.push(row);
       }
@@ -1866,11 +2073,44 @@ class StarMFController {
     }
   };
 
+  /**
+   * Audit #49 — cancel a lumpsum purchase BSE has not settled yet.
+   *
+   * Was: the body forwarded to BSE with only the UCC rebound, so any order id on the member's
+   * book could be named, and nothing said whether it was a purchase or already allotted. Now:
+   * the caller's own order (Laravel's record or their QA book), a purchase, not final — then
+   * BSE decides, in the template's shape. A cancel BSE accepts is recorded as Cancelled.
+   */
   cancelPurchaseOrder = async (req, res) => {
-    if (!req.body || !Object.keys(req.body).length) {
-      return res.status(400).json({ status: "error", message: "Order id is required" });
+    const input = req.body?.data || req.body || {};
+    const id = String(input.id ?? input.order_id ?? "").trim();
+    if (!id) return res.status(400).json({ status: "error", message: "Order id is required" });
+
+    const canned = qaAnswer("getAllOrders", { data: { filter_param: { ucc: [req.ucc] } } })?.data?.lists?.find(
+      (o) => String(o.id) === id
+    );
+    const stored = canned ? null : (await storedOrders(req)).find((o) => String(o.id) === id);
+    const mine = canned || stored;
+    if (!mine) return res.status(404).json({ status: "error", message: "Order not found" });
+
+    const type = String(canned ? canned.trxn_type : stored.type);
+    if (!/^(p|purchase)$/i.test(type)) {
+      return res.status(409).json({ status: "error", message: "Only a lumpsum purchase can be cancelled here." });
     }
-    return this.handleTrxnRequest("cancelPurchaseOrder", bindUcc(req.body, req.ucc, this.memberCode), res);
+    if (/ALLOT|COMPLET|REJECT|CANCEL|FAIL/i.test(String(mine.status))) {
+      return res.status(409).json({ status: "error", message: `This order is already ${String(mine.status).toLowerCase()}.` });
+    }
+
+    // pan_holders / holding_nature come from BSE's own UCC record; a QA book has none.
+    const info = canned ? null : await this.lookupUcc(req.ucc);
+    const result = await this.callTrxn("cancelPurchaseOrder", buildCancelOrderPayload(id, { ucc: req.ucc, info, remark: input.remark }));
+    const failure = result?._status ? String(result.message || "BSE did not cancel the order.") : bseFailure(result);
+    if (failure) return res.status(502).json({ status: "error", message: failure });
+
+    await reportStatusChanges(req, [
+      { bse_order_id: Number(id), state: "cancelled", bse_status: "CANCELLED", remarks: "Cancelled by investor" },
+    ]);
+    return res.json({ status: "success", message: "Order cancelled.", data: result?.data ?? null });
   };
   listPaymentDetail = async (req, res) => {
     let reqObj = req.body && Object.keys(req.body).length ? req.body : orderRequestData.listPaymentDetail;
@@ -1972,6 +2212,19 @@ class StarMFController {
   async lookupScheme(code) {
     if (!code) return null;
     const needle = String(code).trim().toUpperCase();
+    // A scheme in the QA book answers from the book (only while MF_QA_UCC is set).
+    const canned = qaScheme(needle);
+    if (canned) return canned;
+    // Dev only (MF_AMFI_FALLBACK=1, never set in production) and only while BSE has not
+    // logged us in: the same AMFI rows the catalogue lists on a box BSE will not talk to, so
+    // a fund picked from that list can be ordered against the QA book. They carry no BSE
+    // flags or minimums — every gate still runs, with the admin's house floor as the minimum.
+    if (AMFI_FALLBACK && !this.accessToken) {
+      const amfi = ((await getAmfiNavs()).schemes || []).find(
+        (r) => String(r.scheme_bse_code || "").toUpperCase() === needle || String(r.scheme_isin || "").toUpperCase() === needle
+      );
+      if (amfi) return amfi;
+    }
     const reqObj = {
       data: { start: 0, length: 50, fields: ["ALL"], count_only: false, filter_param: {}, search: { value: needle } },
     };
@@ -2008,7 +2261,7 @@ class StarMFController {
       // hai — `total` filter ke baad ki ginti hai, is liye frontend ka page count sach
       // bolta hai. Yahan dobara query() nahi: wo page ko dobara filter kar ke total
       // aur rows ko alag kar deta tha.
-      const { list: pageRows, total, priced, fetched, unpriced, fields, sample, warming, enrichment } = await getCatalogue(this, q);
+      const { list: pageRows, total, priced, fetched, unpriced, fields, sample, warming, enrichment, facets } = await getCatalogue(this, q);
 
       // The page rows are a fresh ARRAY but THE SAME OBJECTS as the process-wide master
       // index (catalogue.js: `rows.slice(...)`), and applyFloor writes in place. Flooring
@@ -2019,6 +2272,10 @@ class StarMFController {
       const lists = pageRows.map((row) => {
         const copy = { ...row };
         applyFloor(limits, copy);
+        // Audit #2 — say which minimums are the platform's own rule, not BSE's; Audit #3 —
+        // the same lock-in the fund page shows (an ELSS card no longer reads "no lock-in").
+        copy.minSource = minSources(row, copy);
+        copy.lockIn = effectiveLockIn(copy);
         return copy;
       });
 
@@ -2046,6 +2303,8 @@ class StarMFController {
           // own row count, not the catalogue's. Dropping this flag was what let the
           // warm-up page look like an authoritative answer.
           warming: warming === true,
+          // Audit #11 — the Category → Sub-category filter's options, in the catalogue's words.
+          facets: facets || [],
           lists,
         },
       };
@@ -2069,7 +2328,9 @@ class StarMFController {
    */
   getSchemeDetails = async (req, res) => {
     try {
-      const { isin, scheme_code } = req.body;
+      // `option` (Audit #1) — "idcw-payout" / "idcw-reinvestment" from an ISIN-only fund URL:
+      // BSE files both options under one ISIN, so the ISIN alone can name either.
+      const { isin, scheme_code, option } = req.body;
       if (!isin && !scheme_code) {
         return res.status(400).json({ status: "error", message: "isin or scheme_code is required" });
       }
@@ -2091,7 +2352,12 @@ class StarMFController {
       };
 
       const needles = [...new Set([isin, scheme_code].filter(Boolean))];
-      let scheme = null;
+      // A QA book scheme (by its BSE code, MF_QA_UCC only) answers with the book's master row,
+      // so the Redeem/Switch forms see the same rulebook its orders are judged on.
+      let scheme = qaScheme(scheme_code);
+      // Dev only — the recorded live catalogue answers before AMFI or BSE (null unless
+      // MF_DEV_CATALOGUE_SNAPSHOT is set; see mf/devSnapshot.js).
+      const snap = scheme ? null : snapshotScheme(isin, scheme_code, option);
 
       // This path queries BSE directly rather than through catalogue.js, so it needs the
       // same AMFI fallback — otherwise every card the AMFI-backed list rendered opens on
@@ -2100,7 +2366,7 @@ class StarMFController {
       // ponytail: checked FIRST when the flag is on. The flag means BSE is known
       // unreachable (dev box is not IP-whitelisted), and its 21s timeout would otherwise
       // be paid on every fund page before falling back. Flag off = untouched BSE-only path.
-      if (AMFI_FALLBACK) {
+      if (!scheme && !snap && AMFI_FALLBACK) {
         const want = needles.map((v) => String(v).trim().toUpperCase());
         scheme = ((await getAmfiNavs()).schemes || []).find((row) =>
           want.includes(String(row.scheme_isin || "").toUpperCase()) ||
@@ -2109,30 +2375,41 @@ class StarMFController {
         if (scheme) console.warn("[mf] AMFI fallback — scheme-details:", scheme.scheme_name);
       }
 
-      if (!scheme) {
+      if (!scheme && !snap) {
         // Moved down from the top of the handler: logging in to BSE is only worth its
         // round trip if we are about to query BSE. An AMFI hit above needs no token, and
         // on an unreachable host that login is a 21s wait on every fund page.
         if (!this.accessToken) await this.loginFunc();
         for (const value of needles) {
           const schemesRes = await searchBse(value);
-          scheme = pickScheme(schemesRes?.data?.lists || [], isin, scheme_code);
+          scheme = pickScheme(schemesRes?.data?.lists || [], isin, scheme_code, option);
           if (scheme) break;
         }
       }
 
-      if (!scheme) return res.status(404).json({ status: "error", message: "Scheme not found" });
-      const mapped = mapScheme(scheme);
+      if (!scheme && !snap) return res.status(404).json({ status: "error", message: "Scheme not found" });
+      const mapped = snap ? snap.row : mapScheme(scheme);
       // The 500 / 5000 that used to be pinned on here were the "hardcoded placeholder
       // values" the ticket calls out: BSE's real minimums live inside lumpsum[]/systematic[]
       // and mapScheme now reads them. Null still means BSE did not say — the UI omits the
       // line rather than inventing a floor the exchange never set.
-      const transactions = schemeTransactions(scheme);
+      const transactions = snap ? snap.transactions : schemeTransactions(scheme);
 
       // QA 6.2 — the admin's own Min Lumpsum / Min SIP, applied where the page READS the
       // number rather than only where the order path refuses it. Both objects are freshly
       // built above, so raising them in place affects nothing else.
-      applyFloor(await getLimits(), mapped, transactions);
+      const own = { minLumpsum: mapped.minLumpsum, minSip: mapped.minSip, minAdditional: transactions.lumpsum?.minAdditional ?? null };
+      const limits = await getLimits();
+      applyFloor(limits, mapped, transactions);
+      // Audit #2 — "Min. for 2nd investment onwards" is BSE's additional-purchase minimum
+      // (it used to print the REDEMPTION minimum). The platform's lumpsum floor binds every
+      // purchase, top-ups included (purchaseNewOrder's houseFloor), so it lifts this one too —
+      // through applyFloor itself, so the rule lives in one place.
+      const topUp = { minLumpsum: own.minAdditional };
+      applyFloor(limits, topUp);
+      mapped.minAdditional = topUp.minLumpsum ?? null;
+      // ...and the page labels a minimum that only the platform set as the platform's.
+      mapped.minSource = minSources(own, mapped);
 
       let mf = null;
       try {
@@ -2174,6 +2451,10 @@ class StarMFController {
       // so a category benchmark is never shown as if the AMC had named it.
       // Unrecognised benchmark or an unreachable index still means no tiles, never invented ones.
       let risk = null;
+      // Audit #5 — a fund with a NAV history but no Alpha/Beta says why, instead of two
+      // tiles that silently vanish: no priceable index for its category (debt, hybrid, gold,
+      // international…), or one that exists but could not be measured against today.
+      let alphaBetaNa = null;
       try {
         const pick = benchmarkFor(mapped);
         const bench = await benchmarkSeries(pick.name);
@@ -2186,13 +2467,20 @@ class StarMFController {
             benchmarkIsPriceIndex: bench.isPriceIndex,
             benchmarkSource: pick.source,
           };
+        } else if (series.length) {
+          alphaBetaNa = !resolveBenchmark(pick.name)
+            ? "no benchmark series"
+            : bench
+            ? "too little shared history with its benchmark"
+            : "benchmark series unavailable";
         }
       } catch (e) {
         console.warn("[mf] alpha/beta unavailable:", e.message);
       }
 
       // Manager, objective and the SEBI risk level — none of them exist in BSE's master.
-      const extra = (await getEnrichment(mapped.scheme_bse_code || scheme_code)) || {};
+      // Dev snapshot: the recorded row carries the live site's copy, used when the feed misses.
+      const extra = (await getEnrichment(mapped.scheme_bse_code || scheme_code)) || snap?.row || {};
 
       return res.json({
         status: "success",
@@ -2216,6 +2504,8 @@ class StarMFController {
                     benchmarkSource: risk.benchmarkSource,
                     benchmarkIsPriceIndex: risk.benchmarkIsPriceIndex,
                   }
+                : alphaBetaNa
+                ? { alphaBetaNa }
                 : {}),
             },
             holdings: profile.holdings,
@@ -2224,6 +2514,9 @@ class StarMFController {
             fundManagers: extra.fundManagers || [],
             objective: extra.objective || null,
             factsheetUrl: extra.factsheetUrl || null,
+            // Audit #5 — the only link the fund page may send an investor off-site with: the
+            // scheme's SID / KIM / SAI page, when that is what the feed's link is.
+            documentsUrl: documentsUrl(extra.factsheetUrl),
             fundRating: extra.fundRating ?? null,
             // Ticket 3 — fund size, in ₹ crore. The unit is normalised inside kuvera.js so
             // nothing downstream has to know what the feed sends.
@@ -2232,7 +2525,8 @@ class StarMFController {
             expense: mapped.expense || extra.expense || null,
             // BSE's own lock-in wins; its column is empty on this host, which is why an ELSS
             // (locked three years by law) was showing none at all. Kuvera's value is in years.
-            lockIn: mapped.lockIn || lockInFromYears(extra.lockInYears),
+            // Audit #3 — one rule shared with the cards and Compare (scheme.effectiveLockIn).
+            lockIn: effectiveLockIn(mapped, extra.lockInYears),
             // "Plan inception": for a scheme older than 2013 the direct plan genuinely
             // starts 2013-01-01, so this is the plan's birthday, not the fund's.
             inceptionDate: extra.inceptionDate || periodReturns.inceptionDate || null,
@@ -2306,12 +2600,14 @@ class StarMFController {
       const loaded = await Promise.all(
         picks.map(async (p) => {
           let scheme = null;
+          // Dev only — the recorded live catalogue, so a dev box skips BSE's 21s timeout.
+          const snap = snapshotScheme(p.isin, p.code);
           try {
-            scheme = await this.lookupScheme(p.code || p.isin);
+            if (!snap) scheme = await this.lookupScheme(p.code || p.isin);
           } catch (e) {
             console.warn("[mf] compare lookup failed:", p.code || p.isin, e.message);
           }
-          const mapped = scheme ? mapScheme(scheme) : null;
+          const mapped = snap ? snap.row : scheme ? mapScheme(scheme) : null;
           const name = mapped?.name || p.code || p.isin;
           let series = [];
           try {
@@ -2320,7 +2616,7 @@ class StarMFController {
           } catch (e) {
             console.warn("[mf] compare NAV failed:", name, e.message);
           }
-          const extra = (await getEnrichment(mapped?.scheme_bse_code || p.code)) || {};
+          const extra = (await getEnrichment(mapped?.scheme_bse_code || p.code)) || snap?.row || {};
           return {
             name,
             scheme_isin: mapped?.scheme_isin || p.isin || null,
@@ -2333,7 +2629,10 @@ class StarMFController {
             expense: mapped?.expense || extra.expense || null,
             fundRating: extra.fundRating ?? null,
             inceptionDate: extra.inceptionDate || null,
-            lockIn: mapped?.lockIn || null,
+            // Audit #10 — the table's Age column read a field this response never carried.
+            ageYears: extra.ageYears ?? null,
+            // Audit #3 — the same lock-in rule as the fund page (an ELSS shows its 3 years).
+            lockIn: effectiveLockIn(mapped || {}, extra.lockInYears),
             txn: mapped?.txn || null,
             series,
           };
@@ -2353,14 +2652,19 @@ class StarMFController {
         const base = window[0]?.nav;
         const rebased = base > 0 ? window.map((p) => ({ timestamp: p.timestamp, value: parseFloat(((p.nav / base) * 100).toFixed(4)), nav: p.nav })) : [];
         const { series, ...rest } = f;
+        const returns = returnsBoth(f.series);
         return {
           ...rest,
+          // Audit #10 — the feed's age when it has one, else the NAV history's own span: the
+          // same fallback the fund page uses, so the two never disagree on a fund's age.
+          ageYears: rest.ageYears ?? returns.years ?? null,
+          inceptionDate: rest.inceptionDate || returns.inceptionDate || null,
           points: window.length,
           rebased,
           // Trailing returns stay on the fund's own full history — that is what a fund card
           // means by "3Y". The rebased line is the like-for-like view; these two answer
           // different questions and the UI labels them separately.
-          returns: returnsBoth(f.series),
+          returns,
           windowReturn:
             base > 0 && window.length > 1
               ? parseFloat((((window[window.length - 1].nav - base) / base) * 100).toFixed(2))
@@ -2760,7 +3064,7 @@ class StarMFController {
         maxRedirects: 5,
         timeout: 30000,
         validateStatus: () => true,
-        httpsAgent: this.insecureAgent,
+        httpsAgent: this.httpsAgent,
       });
     try {
       let path = suffix;
@@ -2799,79 +3103,232 @@ class StarMFController {
    *
    * 2. The payload is bound server-side. It used to forward `req.body` untouched, meaning
    *    the browser chose the UCC, the member code and the mandate amount.
+   *
+   * Audit #22 — and it now does the job end to end: the investor chooses how to authorise
+   * (UPI AutoPay / NetBanking / Debit card / Aadhaar eSign — see mf/mandate.js for what BSE's
+   * templates make of each), a UPI ID is required and checked for UPI, the payload comes from
+   * the template for that channel, and success means BSE said success. It used to answer 200
+   * with BSE's error body inside, which the page read as "Auto-debit authorised." BSE's
+   * approval link goes back to the investor; the mandate is filed in Laravel (which sends the
+   * "action required" notice) and linked to the SIP it was set up for.
    */
-  mandateRegisterUpiAutoPay = async (req, res) => {
-    try {
-      const body = req.body || {};
-      if (body.authorized !== true) {
-        return res.status(400).json({
-          status: "error",
-          code: "mandate_not_authorized",
-          message: "An auto-debit mandate needs your explicit authorisation. Nothing has been registered.",
-        });
-      }
-
-      // The ceiling is the platform's, not the browser's. A mandate limit is the most an
-      // account can ever be debited under it, so an unbounded one from a request body is
-      // the single most costly field on this endpoint to get wrong.
-      const requested = Number(body?.data?.amount) || 0;
-      const ceiling = Number(process.env.MANDATE_MAX_LIMIT || 100000);
-      if (!(requested > 0) || requested > ceiling) {
-        return res.status(400).json({
-          status: "error",
-          code: "mandate_limit_invalid",
-          message: `An auto-debit limit must be between ₹1 and ₹${ceiling.toLocaleString("en-IN")}.`,
-        });
-      }
-
-      const loginResp = await this.loginFunc();
-
-      if (loginResp?.status === "error") {
-        return res.json(loginResp);
-      }
-      // UCC and member come from the verified session, never from the payload.
-      const payload = bindUcc({ data: { ...(body.data || {}) } }, req.ucc, this.memberCode);
-      payload.data.member = this.memberCode;
-      delete payload.data.authorized;
-
-      const response = await axios.post(
-        `${this.bseDemoUrl}/mandate_register`,
-        payload,
-        {
-          headers: {
-            Authorization: `Bearer ${this.accessToken}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      // §2 row 5 — the audit row carries what the investor actually authorised.
-      const out = response.data?.data || response.data || {};
-      await recordConsents(req, [
-        {
-          type: "enach_authorization",
-          mandate_id: String(out.mandate_id || out.umrn || out.member_mandate_id || "").slice(0, 64) || null,
-          max_limit: requested,
-          bank_ref: String(out.bank_ref || out.umrn_number || "").slice(0, 64) || null,
-        },
-      ]);
-
-      return res.json({
-        response: response.data,
-      });
-    }catch (error) {
-      console.error(
-        "Mandate Register UPI Auto Pay Error:",
-        error.response?.data || error.message
-      );
-
-      return res.status(500).json({
+  mandateRegisterUpiAutoPay = async (req, res, defaultMode) => {
+    const body = req.body || {};
+    if (body.authorized !== true) {
+      return res.status(400).json({
         status: "error",
-        message: bseMessage(error),
-        detail: error.response?.data || null,
+        code: "mandate_not_authorized",
+        message: "An auto-debit mandate needs your explicit authorisation. Nothing has been registered.",
       });
     }
-  }
+
+    // The ceiling is the platform's, not the browser's. A mandate limit is the most an
+    // account can ever be debited under it, so an unbounded one from a request body is
+    // the single most costly field on this endpoint to get wrong.
+    const requested = Number(body?.data?.amount) || 0;
+    const ceiling = Number(process.env.MANDATE_MAX_LIMIT || 100000);
+    if (!(requested > 0) || requested > ceiling) {
+      return res.status(400).json({
+        status: "error",
+        code: "mandate_limit_invalid",
+        message: `An auto-debit limit must be between ₹1 and ₹${ceiling.toLocaleString("en-IN")}.`,
+      });
+    }
+
+    // Express hands a route its `next` as the third argument; only the register aliases
+    // pass a real default channel. UPI stays the default the existing route always meant.
+    const mode = String(body.mode || (typeof defaultMode === "string" ? defaultMode : "upi")).trim().toLowerCase();
+    if (!MANDATE_MODES[mode]) {
+      return res.status(400).json({ status: "error", code: "mandate_mode_invalid", message: "Choose UPI AutoPay, NetBanking, Debit card or Aadhaar eSign." });
+    }
+    const vpa = String(body.vpa || "").trim();
+    if (mode === "upi" && !validVpa(vpa)) {
+      return res.status(400).json({ status: "error", code: "vpa_invalid", message: "Enter your UPI ID — for example yourname@okhdfcbank." });
+    }
+    // The account the mandate debits is the investor's own, from their KYC — never the page's.
+    const bank = (req.investor?.bank_accounts || []).find((b) => b?.account_number && b?.ifsc_code);
+    if (!bank) {
+      return res.status(400).json({ status: "error", code: "bank_missing", message: "Add your bank account in KYC before setting up auto-debit." });
+    }
+
+    const sipRegNo = String(body.sip_reg_no || "").trim();
+    const gate = await this.gateOrder(req, null, { suitability: false });
+    if (gate) return res.status(gate.httpStatus || 403).json(gate);
+    const payload = buildMandateRegisterPayload({
+      mode,
+      vpa,
+      amount: requested,
+      bank,
+      ucc: req.ucc,
+      memberCode: this.memberCode,
+      refId: req.consentRef,
+    });
+    const mandateRef = payload.data.mem_mandate_info.member_mandate_id;
+    if (!(await recordConsents(req, [
+      { type: "enach_authorization", order_id: mandateRef, max_limit: requested },
+    ]))) {
+      return res.status(503).json({ status: "error", code: "consent_unavailable",
+        message: "Your authorisation could not be saved. No mandate has been submitted; please try again." });
+    }
+    const result = await this.callMandate("registerMandate", payload);
+    const failure = result?._status ? String(result.message || "BSE did not register the mandate.") : bseFailure(result);
+    if (failure) {
+      // Filed as failed so the investor is told it needs another go (Laravel's notice).
+      await recordMandate(req, { mode, status: "failed", amount: requested, sip_reg_no: sipRegNo || null, note: failure.slice(0, 300) });
+      return res.status(502).json({ status: "error", code: "mandate_failed", message: failure });
+    }
+
+    const out = mandateOutcome(result);
+    // BSE's own host is IP-whitelisted, so a link on it goes through our proxy — the payment
+    // page's rule (getPaymentLink). Any other host (NPCI, the bank) is left as it is.
+    const link = out.approval_link ? this.proxify(out.approval_link) : null;
+
+    // §2 row 5 — the audit row carries what the investor actually authorised.
+    await recordConsents(req, [
+      { type: "enach_authorization", order_id: mandateRef, mandate_id: out.exch_mandate_id ? out.exch_mandate_id.slice(0, 64) : null, max_limit: requested, bank_ref: null },
+    ]);
+
+    let row = await recordMandate(req, {
+      exch_mandate_id: out.exch_mandate_id,
+      mode,
+      status: out.state,
+      amount: requested,
+      approval_link: link,
+      sip_reg_no: sipRegNo || null,
+    });
+    // Linked at BSE when the SIP is already visible there; otherwise /mandateStatus links it
+    // on a later look. Laravel holds the pairing either way, so the SIP card can show it.
+    let linked = false;
+    if (sipRegNo && out.exch_mandate_id) {
+      const sip = await this.loadOwnedSip(req, sipRegNo);
+      if (sip) linked = await this.linkMandateToSip(req, row || { ...out, mode, amount: requested, status: out.state }, xspRegNo(sip));
+    }
+
+    return res.json({
+      status: "success",
+      data: {
+        exch_mandate_id: out.exch_mandate_id,
+        state: out.state,
+        mode,
+        approval_link: link,
+        linked,
+      },
+    });
+  };
+
+  /**
+   * Audit #11 — "Invest in this basket", in one click.
+   *
+   * One acknowledgement covers the basket; the amount is split by the basket's own weights
+   * (from Laravel, never the browser); every leg is checked against its scheme's minimum, the
+   * house floor, hidden schemes and "open for purchase" BEFORE anything is placed, so a basket
+   * is never left half-bought because its third fund was always going to be refused. Then each
+   * leg goes through purchaseNewOrder itself — the same door as a single-fund purchase, so
+   * suitability, the approval threshold and the consent trail apply per fund exactly as they
+   * would there. What BSE accepted is written to bse_orders here, server-side.
+   */
+  basketCheckout = async (req, res) => {
+    const input = req.body?.data || req.body || {};
+    const amount = Number(input.amount);
+    if (!(amount > 0)) return res.status(400).json({ status: "error", message: "Enter the amount to invest." });
+
+    // One acknowledgement for the whole basket — and checked once, up front, so a missing
+    // tick refuses the basket rather than every leg one by one.
+    const disclaimed = checkDisclaimers(input, { rms: cachedDistributor().rms });
+    if (!disclaimed.ok) {
+      return res.status(403).json({ status: "error", code: disclaimed.code, message: disclaimed.message, required: disclaimed.required });
+    }
+
+    const plan = await basketPlan(req, input.basket_id);
+    if (!plan) return res.status(404).json({ status: "error", message: "Basket not found." });
+    if (!plan.legs.length) return res.status(400).json({ status: "error", message: "This basket has no funds in it." });
+    if (plan.legs.some((l) => l.asset_type !== "mutual_fund")) {
+      return res.status(400).json({
+        status: "error",
+        message: "Only mutual funds can be bought through basket checkout. This basket also holds stocks or ETFs — buy those from their own pages.",
+      });
+    }
+
+    const shares = splitByWeight(amount, plan.legs.map((l) => l.weight));
+    const houseFloor = (await getLimits()).minLumpsum;
+    const hidden = await getHidden();
+    const legs = [];
+    for (const [i, l] of plan.legs.entries()) {
+      // An unreadable master is "not found", which refuses the basket — never a crash.
+      const scheme = await this.lookupScheme(l.code).catch(() => null);
+      const limits = checkSchemeLimits({ type: "p", amount: shares[i] }, scheme, houseFloor);
+      legs.push({
+        code: l.code,
+        name: l.name || mapScheme(scheme || {}).name || l.code,
+        weight: Number(l.weight),
+        amount: shares[i],
+        reason: isHidden(hidden, { scheme_bse_code: l.code }) ? "This scheme is not available for investment." : limits.ok ? null : limits.error,
+      });
+    }
+    if (legs.some((l) => l.reason)) {
+      return res.status(400).json({
+        status: "error",
+        code: "basket_leg_refused",
+        message: "Nothing was placed — at least one fund cannot take its share of this amount.",
+        data: { legs: legs.map((l) => ({ ...l, result: l.reason ? "refused" : "not_placed" })) },
+      });
+    }
+
+    const results = [];
+    for (const [i, l] of legs.entries()) {
+      const mem = `${Date.now()}${String(i).padStart(2, "0")}${String(Math.floor(Math.random() * 1000)).padStart(3, "0")}`;
+      // The same order the single-fund page sends; UCC, member, demat and the AMFI block are
+      // bound by purchaseNewOrder as for any other purchase.
+      const order = {
+        type: "p",
+        mem_ord_ref_id: mem,
+        scheme: l.code,
+        amount: l.amount,
+        cur: "INR",
+        is_units: false,
+        all_units: false,
+        min_redeem_flag: false,
+        folio: "",
+        is_fresh: true,
+        holder: [{ holder_rank: "1", email: req.investor?.email || "" }],
+        kyc_passed: true,
+        dpc: true,
+        email: req.investor?.email || "",
+      };
+      const leg = { headers: req.headers, ip: req.ip, investor: req.investor, ucc: req.ucc, body: { data: { orders: [order], acknowledged: input.acknowledged } } };
+      // A throw inside one leg must still answer, not leave the basket hanging with the legs
+      // before it already placed and nobody told.
+      const out = await new Promise((resolve) =>
+        Promise.resolve(
+          this.purchaseNewOrder(leg, {
+            json: (data) => resolve(data),
+            status: (code) => ({ json: (data) => resolve({ ...data, _status: code }) }),
+          })
+        ).catch((e) => resolve({ status: "error", message: `Not placed: ${e.message}`, _status: 500 }))
+      );
+      const id = out?.data?.items?.[0]?.id;
+      if (!out?._status && !bseFailure(out) && id != null) {
+        await recordOrder(req, {
+          bse_order_id: id,
+          mem_ord_ref_id: out.data.items[0].mem_ord_ref_id || mem,
+          scheme_name: l.name,
+          scheme_bse_code: l.code,
+          inv_amo: l.amount,
+          order_type: "purchase",
+        });
+        results.push({ ...l, result: "placed", order_id: id });
+      } else if (out?.code === "ORDER_APPROVAL_REQUIRED") {
+        results.push({ ...l, result: "held", reason: out.message });
+      } else {
+        results.push({ ...l, result: "refused", reason: out?.message || bseFailure(out) || "Not placed." });
+      }
+    }
+    const count = (r) => results.filter((x) => x.result === r).length;
+    return res.json({
+      status: "success",
+      data: { basket: plan.name || null, legs: results, placed: count("placed"), held: count("held"), refused: count("refused") },
+    });
+  };
   // BSE payment gateway callback — forwards status to Laravel admin backend
   paymentCallback = async (req, res) => {
     try {

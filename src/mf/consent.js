@@ -4,21 +4,9 @@ const { configData } = require("../config");
 /**
  * §2 "Digital Consent Matrix" + §4.1 — writing the consent audit trail.
  *
- * ── Why Node records this and not the browser ────────────────────────────────────────────
- * The consent that matters is the one attached to the order that was actually placed. The
- * browser can tell you what it rendered; only this path knows what got through the gate and
- * reached BSE. Recording from here means a consent row exists if and only if an order was
- * accepted, and the two carry the same reference.
- *
- * ── Why it never blocks ──────────────────────────────────────────────────────────────────
- * The disclaimer GATE already refused the order if the ticks were missing — by the time this
- * runs, the investor has consented and the order is going to the exchange. Failing the trade
- * because the log write timed out would punish the investor for our bookkeeping, and would
- * leave money in limbo at BSE with nothing recorded either way. So a failure is loud in the
- * logs and returns false; it does not throw and it does not stop the order.
- *
- * That trade-off is only acceptable because the gate is the control and this is the record.
- * If this were the control, it would have to fail closed.
+ * Node saves the investor's declaration BEFORE submitting an instruction to BSE.
+ * False means the caller must stop. A consent records an authorised attempt; the separate
+ * order/mandate record describes whether the exchange subsequently accepted that attempt.
  */
 
 const url = () => `${String(configData.investorUrl || "").replace(/\/investor-data\/?$/, "")}/consents`;
@@ -39,7 +27,7 @@ async function recordConsents(req, entries = []) {
   }
 
   try {
-    await axios.post(
+    const response = await axios.post(
       url(),
       { consents, device_id: req.headers?.["x-device-id"] || null },
       {
@@ -56,9 +44,9 @@ async function recordConsents(req, entries = []) {
         },
       },
     );
-    return true;
+    return response.data?.status === true;
   } catch (err) {
-    // Loud, because a missing consent row is an audit finding even though the order is fine.
+    // The caller refuses submission rather than losing the audit trail.
     console.error(
       "[consent] FAILED to record consent trail:",
       err.response ? `${err.response.status} ${JSON.stringify(err.response.data).slice(0, 200)}` : err.message,

@@ -143,17 +143,79 @@ function checkSchemeLimits(order, scheme, platformFloor = 0) {
   return { ok: true };
 }
 
-// 2FA link ki request mein asli UCC jana chahiye. fetch2FALinkRequestData sirf sample
-// hai — usay jaisa ka waisa bhejne se BSE kisi aur (mojood hi nahi) client ka link banata
-// hai. PAN aur holding_nature get_ucc ke record se aate hain.
-function twoFaUccPayload(event, { ucc, info, memberCode }) {
-  const pans = (info?.holder || [])
+/**
+ * Audit #46 — the rules a switch must meet before it reaches BSE. Both arguments are BSE
+ * master rows from lookupScheme.
+ *
+ * A switch moves money between two schemes of the SAME fund house; across AMCs it is a
+ * redemption plus a purchase, which BSE refuses. Only a fact BSE actually published refuses
+ * here: an AMC or a Switch-IN/OUT row it never sent is left to BSE, exactly like the other
+ * order checks. A missing or closed destination is refused outright — that is the purchase
+ * half of the switch, and a purchase into a closed scheme is refused the same way.
+ */
+const amcKey = (s, key) => String(s?.[key] || "").trim().toUpperCase();
+function switchRefusal(source, dest) {
+  if (!dest || !isTransactable(dest)) return "The destination scheme is not open for investment.";
+  // Compare like with like: a code against a code, a name against a name.
+  for (const key of ["amc_code", "scheme_amc_name", "amc_name"]) {
+    const a = amcKey(source, key);
+    const b = amcKey(dest, key);
+    if (a && b) {
+      if (a !== b) return "A switch can only move money between schemes of the same fund house (AMC).";
+      break;
+    }
+  }
+  if (schemeTransactions(source || {}).switchOut?.allowed === false) {
+    return "This scheme does not allow switching out. Redeem instead.";
+  }
+  if (schemeTransactions(dest).switchIn?.allowed === false) {
+    return "The destination scheme does not accept switches in.";
+  }
+  return null;
+}
+
+/**
+ * Audit #42 — money leaves only for an investor whose PAN is verified.
+ *
+ * `pan_verified` is the flag Laravel sets when BSE approves the UCC (KycController::syncBseKyc)
+ * or the PAN provider confirms the number, and that an approved PAN change clears on purpose
+ * ("re-verify it to restore full withdrawal access"). investor-data carries it on `profile`.
+ */
+const panVerified = (investor) => [true, 1, "1", "true"].includes(investor?.profile?.pan_verified);
+const PAN_NOT_VERIFIED =
+  "Withdrawals need a verified PAN, and yours is not verified yet. Open KYC to verify it, then try again.";
+
+/** The PANs on a get_ucc record — what the 2FA and cancel payloads both carry. */
+const holderPans = (info) =>
+  (info?.holder || [])
     .map(
       (h) =>
         (h?.identifier || []).find((i) => String(i?.identifier_type || "").toLowerCase() === "pan")
           ?.identifier_number
     )
     .filter(Boolean);
+
+/**
+ * Audit #49 — BSE's order_cancel, in exactly the shape of orderRequestData.cancelPurchaseOrder.
+ * The UCC is the session's and the holder block is BSE's own get_ucc record, never the
+ * browser's. With no record the template's own empty values go, as the template shows them.
+ */
+function buildCancelOrderPayload(id, { ucc, info, remark } = {}) {
+  const n = Number(id);
+  return {
+    data: {
+      id: Number.isFinite(n) ? n : String(id),
+      investor: { ucc, pan_holders: holderPans(info), holding_nature: info?.holding_nature || "" },
+      remark: String(remark || "").trim().slice(0, 200) || "Cancelled by investor",
+    },
+  };
+}
+
+// 2FA link ki request mein asli UCC jana chahiye. fetch2FALinkRequestData sirf sample
+// hai — usay jaisa ka waisa bhejne se BSE kisi aur (mojood hi nahi) client ka link banata
+// hai. PAN aur holding_nature get_ucc ke record se aate hain.
+function twoFaUccPayload(event, { ucc, info, memberCode }) {
+  const pans = holderPans(info);
   return {
     data: [
       {
@@ -170,7 +232,7 @@ function twoFaUccPayload(event, { ucc, info, memberCode }) {
   };
 }
 
-function normalizeOrder(order, { ucc, memberCode, mobile }) {
+function normalizeOrder(order, { ucc, memberCode, mobile, euin = "" }) {
   const type = String(order.type || "").toLowerCase();
   const allUnits = !!order.all_units;
   const mobnum = mobile || normalizeMobile(order.mobnum);
@@ -198,18 +260,18 @@ function normalizeOrder(order, { ucc, memberCode, mobile }) {
     // Built AFTER the caller's fields are spread, so a browser-supplied `mem_details` can
     // never overwrite it — which is exactly how a fabricated EUIN used to reach the exchange.
     //
-    // No EUIN is read from the request ON PURPOSE. An EUIN attributes the trade to a named
+    // No EUIN is read from the order ON PURPOSE. An EUIN attributes the trade to a named
     // employee and earns them the commission; if the browser could name one, anybody could
-    // attribute anybody's order. This platform has no RM module, so every trade genuinely is
-    // execution-only — the day one exists, the EUIN comes from the investor's server-side
-    // assignment, never from the payload.
+    // attribute anybody's order. Audit #33 — `euin` is the caller's, and the only caller
+    // that sets it passes what the disclaimer gate resolved against the admin's RM register
+    // (req.rmEuin). Blank, which is every other order, means execution-only.
     // Sent verbatim as AMFI writes it: EUIN empty, declaration set. Probed live against
     // order_new on 2026-09-24 — the full block, an empty euin, and a named euin are all
     // accepted, so nothing has to be trimmed here the way sxp_register forced.
     //
     // Note from that probe: BSE accepted the ILLEGAL pair (named euin + declaration) without
     // complaint. The exchange will not catch it, so assertEuinSane is the only thing that does.
-    mem_details: memDetails({ omitEmpty: false }),
+    mem_details: memDetails({ euin, omitEmpty: false }),
   };
 }
 
@@ -226,4 +288,8 @@ module.exports = {
   allowedModes,
   twoFaUccPayload,
   normalizeOrder,
+  switchRefusal,
+  panVerified,
+  PAN_NOT_VERIFIED,
+  buildCancelOrderPayload,
 };

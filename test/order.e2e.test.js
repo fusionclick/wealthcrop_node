@@ -19,6 +19,9 @@ const okInvestor = (over = {}) => ({
     // Ticket 24: a purchase is now refused outright without a risk profile, so the
     // happy-path fixture carries one. The gate itself is exercised further down.
     riskProfile: { profile: "Aggressive", score: 82 },
+    // Audit #42: a redemption now needs a verified PAN, so the happy path carries one. The
+    // refusal is exercised in transactions.e2e.test.js.
+    profile: { pan_verified: true },
     ...over,
   },
 });
@@ -103,6 +106,16 @@ before(async () => {
               ],
             },
           ],
+        },
+        // Audit #46: a switch's destination must now exist on the master and be open for
+        // purchase (it is the half of the switch that buys), so the fixture lists the 008G
+        // the switch tests move into.
+        {
+          scheme_name: "SBI ESG DESTINATION GROWTH",
+          scheme_isin: "INF200K01222",
+          scheme_bse_code: "008G",
+          scheme_status: "active",
+          lumpsum: [txnRow("Purchase", 5000)],
         },
       ],
     },

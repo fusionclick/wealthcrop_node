@@ -250,6 +250,45 @@ function lockInFromYears(years) {
   return { period: n, type: "year", label: `${n} year${n === 1 ? "" : "s"}` };
 }
 
+/**
+ * Audit #3 — the ONE lock-in rule for the fund page, Explore/Search cards and Compare: BSE's
+ * own column, then the enrichment feed's years (`lockInYears`), then the law. An ELSS is
+ * locked for three years under the ELSS Scheme 2005, so a scheme the catalogue classifies as
+ * ELSS is never shown without it just because both feeds were silent — which is what every
+ * card did, BSE's column being empty on the host we reach.
+ *
+ * Display only. The redemption guard keeps its own inputs (BSE's column + the feed).
+ */
+function effectiveLockIn(row = {}, years = row.lockInYears) {
+  return (
+    row.lockIn ||
+    lockInFromYears(years) ||
+    (/\belss\b/i.test(`${row.subType || ""} ${row.category || ""}`) ? lockInFromYears(3) : null)
+  );
+}
+
+/**
+ * Audit #2 — which minimums on a row are the platform's own rule rather than BSE's.
+ * `before` is the row as BSE published it, `after` the same row once the admin floor
+ * (platformLimits.applyFloor) has been applied. A number that changed — or appeared — came
+ * from the floor; one that did not is the scheme's own; null is "nobody set one".
+ */
+function minSources(before = {}, after = {}) {
+  const src = (key) => (after[key] == null ? null : Number(after[key]) === Number(before[key]) ? "scheme" : "platform");
+  return { lumpsum: src("minLumpsum"), sip: src("minSip"), additional: src("minAdditional") };
+}
+
+/**
+ * Audit #11 — the sub-category half of `subType` ("Equity • Large Cap Fund" → "Large Cap"),
+ * the vocabulary the Category → Sub-category filter offers and matches on. BSE spells some of
+ * its sub-categories with a trailing "Fund" and the name-derived ones without, so both are
+ * read as one option. null when the scheme has no sub-category of its own.
+ */
+function subCategoryOf(row = {}) {
+  const sub = String(row.subType || "").split(" • ")[1] || "";
+  return sub.replace(/\s+(fund|scheme)s?$/i, "").trim() || null;
+}
+
 // "IDCW Payout" / "IDCW Reinvestment" / "Growth" — BSE's own scheme_option, normalised so
 // the UI can badge it without every page re-inventing the spelling.
 function payoutOf(scheme = {}) {
@@ -329,15 +368,35 @@ function mapScheme(scheme = {}, index = 0) {
   };
 }
 
-function pickScheme(lists = [], isin, code) {
+/** "IDCW Payout" → "idcw-payout": the payout option as it travels in a fund URL. */
+const optionSlug = (v) => String(v || "").trim().toLowerCase().replace(/\s+/g, "-");
+
+function pickScheme(lists = [], isin, code, option) {
   const i = String(isin || "").trim().toUpperCase();
   const c = String(code || "").trim().toUpperCase();
+  const bseOf = (item) => String(item.scheme_bse_code || item.bse_scheme_code || "").trim().toUpperCase();
+  const isinOf = (item) => String(item.scheme_isin || item.isin || "").trim().toUpperCase();
+  // Audit #1 — fund URLs carry the ISIN alone now, so the BSE code is usually not given. An
+  // exact code still wins (old two-segment links); otherwise the LIVE row for that ISIN, never
+  // BSE's dead duplicate of it (011-DP beside FR011-DP), which would price and route the fund
+  // to a code that no longer trades. A code-only link puts the code in the ISIN slot.
+  const exact = c && lists.find((item) => bseOf(item) === c);
+  if (exact) return exact;
+  let sameIsin = i ? lists.filter((item) => isinOf(item) === i) : [];
+  // BSE files a scheme's IDCW payout and reinvestment options under ONE ISIN (1,416 such
+  // ISINs in the live master on 2026-10-02), so a link that names the option picks between
+  // them; ISIN + option is unique for all but four rows.
+  const opt = optionSlug(option);
+  if (opt && sameIsin.length > 1) {
+    const byOption = sameIsin.filter((item) => optionSlug(item.payout || payoutOf(item)) === opt);
+    if (byOption.length) sameIsin = byOption;
+  }
   return (
-    lists.find((item) => {
-      const bse = String(item.scheme_bse_code || item.bse_scheme_code || "").trim().toUpperCase();
-      const isinCode = String(item.scheme_isin || item.isin || "").trim().toUpperCase();
-      return (c && bse === c) || (i && isinCode === i);
-    }) || lists[0] || null
+    sameIsin.find((item) => isTransactable(item)) ||
+    sameIsin[0] ||
+    (i && lists.find((item) => bseOf(item) === i)) ||
+    lists[0] ||
+    null
   );
 }
 
@@ -797,6 +856,10 @@ function parseListQuery(body = {}) {
   const returnPeriod = String(body.returnPeriod || src.returnPeriod || "1Y").trim().toUpperCase();
   const sort = String(body.sort || src.sort || "").trim().toLowerCase();
   const order = String(body.order || src.order || "desc").trim().toLowerCase() === "asc" ? "asc" : "desc";
+  // Audit #11 — the catalogue's own category / sub-category, matched exactly (case aside).
+  // Separate from `category`, which carries the collection slugs (gold_funds, large_cap…).
+  const schemeCategory = String(body.schemeCategory || src.schemeCategory || "").trim();
+  const subCategory = String(body.subCategory || src.subCategory || "").trim();
   return {
     start,
     length,
@@ -817,6 +880,8 @@ function parseListQuery(body = {}) {
     returnPeriod,
     sort,
     order,
+    schemeCategory,
+    subCategory,
   };
 }
 
@@ -827,8 +892,8 @@ function categorySearch(category) {
       large_cap: "LARGE CAP",
       mid_cap: "MID CAP",
       small_cap: "SMALL CAP",
-      high_return: "FLEXI CAP",
-      "5_star_funds": "BLUECHIP",
+      // Audit #11 — high_return / 5_star_funds were name searches ("FLEXI CAP", "BLUECHIP")
+      // posing as rankings. They are filtered on real data in matchesCategory now.
       kotak_funds: "KOTAK",
     }[category] || ""
   );
@@ -846,6 +911,12 @@ function matchesCategory(item, category) {
   if (category === "gold_funds") {
     return /\bgold\b/.test(hay) || /\bsilver\b/.test(hay) || hay.includes("precious metal");
   }
+  // Audit #11 — these two fell through to `true` (every fund) while their collection page
+  // searched names for "FLEXI CAP" / "BLUECHIP". Now they mean what they say, read off the
+  // index row: a real 3-year return to rank on (catalogue.query sorts by it), and the rating
+  // feed's five stars. A fund with neither is left out, never assumed to qualify.
+  if (category === "high_return") return Number.isFinite(item.returns?.["3Y"]);
+  if (category === "5_star_funds") return Number(item.fundRating) === 5;
   return true;
 }
 
@@ -887,6 +958,8 @@ function listCacheKey(q = {}, limits = null) {
     q.returnPeriod,
     q.sort,
     q.order,
+    q.schemeCategory,
+    q.subCategory,
   ].join("|");
 }
 
@@ -925,6 +998,9 @@ module.exports = {
   txnSummary,
   lockInOf,
   lockInFromYears,
+  effectiveLockIn,
+  minSources,
+  subCategoryOf,
   payoutOf,
   returnsBoth,
   rollingReturns,
@@ -933,6 +1009,7 @@ module.exports = {
   planOf,
   mapScheme,
   pickScheme,
+  optionSlug,
   navLookup,
   calcReturns,
   buildChartSeries,

@@ -136,7 +136,7 @@ describe("ticket 22: disclaimer acknowledgement", () => {
     // AMFI publishes the execution-only wording; the parts that carry the meaning must survive
     // any rewording through the env override.
     assert.match(DISCLAIMERS.execution_only, /execution-only/i);
-    assert.match(DISCLAIMERS.execution_only, /without any interaction or advice/i);
+    assert.match(DISCLAIMERS.execution_only, /^You are processing an Execution-Only transaction\. This scheme selection has been made independently by you without any advice from /);
     assert.match(DISCLAIMERS.regular_plan_commission, /trail commission/i);
     assert.match(DISCLAIMERS.regular_plan_commission, /AMFI-registered Mutual Fund Distributor/i);
     assert.match(DISCLAIMERS.scheme_documents, /SID/);
@@ -157,5 +157,69 @@ describe("ticket 22: disclaimer acknowledgement", () => {
     }
     assert.match(DISCLAIMERS.market_risk, /subject to market risks/i);
     assert.match(DISCLAIMERS.past_performance, /past performance/i);
+  });
+});
+
+// ── Audit #31/#33/#34: plan, RM-assisted declaration, entity name ───────────────────────
+
+describe("Audit #31: Regular plans only", () => {
+  it("a Direct plan is refused whatever the investor's profile", () => {
+    const v = checkSuitability(investor("Aggressive"), { plan: "Direct", category: "Debt" });
+    assert.equal(v.ok, false);
+    assert.equal(v.code, "direct_plan_not_offered");
+  });
+
+  it("a Regular plan, or a row that names no plan, is judged on risk as before", () => {
+    assert.equal(checkSuitability(investor("Aggressive"), { plan: "Regular", category: "Equity" }).ok, true);
+    assert.equal(checkSuitability(investor("Aggressive"), { category: "Equity" }).ok, true);
+  });
+});
+
+describe("Audit #33: the RM-assisted declaration", () => {
+  const rms = [{ euin: "E123456", name: "Asha" }];
+  const withRm = (euin) => [...REQUIRED_ACKS.filter((k) => k !== "execution_only"), `rm_assisted:${euin}`];
+
+  it("stands in for execution_only when it names someone on the register", () => {
+    assert.deepEqual(checkDisclaimers({ acknowledged: withRm("e123456") }, { rms }), { ok: true, euin: "E123456" });
+    assert.deepEqual(checkDisclaimers({ acknowledged: REQUIRED_ACKS }, { rms }), { ok: true, euin: "" });
+  });
+
+  it("an EUIN that is not on the register is refused — an empty register refuses them all", () => {
+    assert.equal(checkDisclaimers({ acknowledged: withRm("E000001") }, { rms }).code, "rm_not_registered");
+    assert.equal(checkDisclaimers({ acknowledged: withRm("E123456") }).code, "rm_not_registered");
+  });
+
+  it("both declarations at once, or two RMs, is a contradiction", () => {
+    assert.equal(checkDisclaimers({ acknowledged: [...REQUIRED_ACKS, "rm_assisted:E123456"] }, { rms }).code, "rm_declaration_conflict");
+    assert.equal(
+      checkDisclaimers({ acknowledged: [...withRm("E123456"), "rm_assisted:E654321"] }, { rms: [...rms, { euin: "E654321" }] }).code,
+      "rm_declaration_conflict"
+    );
+  });
+
+  it("a bare rm_assisted with no EUIN declares nothing", () => {
+    const v = checkDisclaimers({ acknowledged: [...REQUIRED_ACKS.filter((k) => k !== "execution_only"), "rm_assisted"] }, { rms });
+    assert.equal(v.ok, false);
+    assert.deepEqual(v.required, ["execution_only"]);
+  });
+
+  it("the RM text has the slots the checkout fills", () => {
+    assert.match(DISCLAIMERS.rm_assisted, /\{rm\}/);
+    assert.match(DISCLAIMERS.rm_assisted, /\{euin\}/);
+  });
+});
+
+describe("Audit #34: no invented legal entity", () => {
+  it("names AMFI's 'the distributor' until the panel supplies the real name", (t) => {
+    if (process.env.LEGAL_ENTITY_NAME || process.env.DISCLAIMER_EXECUTION_ONLY) return t.skip("an env override is set");
+    assert.doesNotMatch(DISCLAIMERS.execution_only, /Wealthcrop Advisory/i);
+    assert.match(DISCLAIMERS.execution_only, /the distributor/);
+  });
+
+  it("the identity line needs BOTH the entity and the ARN", () => {
+    const { identityLine } = require("../src/mf/distributor");
+    assert.equal(identityLine("", "ARN-1"), "");
+    assert.equal(identityLine("X Ltd", ""), "");
+    assert.equal(identityLine("X Ltd", "ARN-1"), "X Ltd | AMFI-registered Mutual Fund Distributor | ARN: ARN-1");
   });
 });

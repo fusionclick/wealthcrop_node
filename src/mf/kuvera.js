@@ -89,6 +89,19 @@ const str = (v) => {
   return s && !/^(na|n\/a|null|-)$/i.test(s) ? s : null;
 };
 
+/**
+ * Audit #5 — the fund page links out to one thing only: the scheme's compliance documents.
+ * `detail_info` is the AMC's SID / KIM / SAI page for many AMCs (".../kim-sid-and-sai/",
+ * ".../offer-document-sid-kim") and a generic investor-corner or home page for others; only
+ * the first kind is the document SEBI requires an investor to be able to read, so only that
+ * kind survives. Anything else is null and the page shows no external link at all.
+ */
+const DOCS = /\b(sid|sai|kim)\b|offer[-_ ]?documents?|scheme[-_ ]?information|key[-_ ]?information/i;
+const documentsUrl = (raw) => {
+  const url = str(raw);
+  return url && /^https:\/\//i.test(url) && DOCS.test(url) ? url : null;
+};
+
 const pct = (v) => {
   const n = Number(v);
   // Kuvera sends 0 for "not available" on funds younger than the window (a genuine 0.00%
@@ -243,6 +256,9 @@ async function enrichRows(rows = []) {
       fundRating: extra.fundRating,
       aum: extra.aum,
       aumUnit: extra.aumUnit,
+      // Audit #3 — the feed's lock-in rides on the row so cards apply the same rule the fund
+      // page does (scheme.effectiveLockIn).
+      lockInYears: extra.lockInYears,
       returns: extra.returns || row.returns,
     };
   });
@@ -273,6 +289,7 @@ function applyCached(row) {
   // matched nothing while the very same row showed an AUM in the response.
   row.aum = extra.aum;
   row.aumUnit = extra.aumUnit;
+  row.lockInYears = extra.lockInYears;
   row.enriched = true;
   return true;
 }
@@ -355,6 +372,7 @@ module.exports = {
   resetEnrichmentCache,
   normaliseRisk,
   aumCrore,
+  documentsUrl,
   RISK_LEVELS,
   RISK_RANK,
 };

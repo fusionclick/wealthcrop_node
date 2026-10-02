@@ -66,6 +66,42 @@ const SCHEMES = {
   },
 };
 
+/**
+ * BSE master rows for the book's own schemes — what lookupScheme and /scheme-details read.
+ *
+ * Without these an order against a QA folio stops at "Scheme not found or not transactable"
+ * (the master is BSE's, and BSE is unreachable from a QA box), so no redemption, switch or SWP
+ * on the book could be shown working. Only the equity fund is listed; the debt fund stays
+ * unknown on purpose, so QA also sees the "BSE did not say" path.
+ *
+ * Shape is the live master's (see test/order.e2e.test.js): per-type rows inside lumpsum[] and
+ * systematic[]. No amounts — this book does not know the AMC's minimums, so none are claimed;
+ * the house floor from the admin panel still applies. AMC name is AMFI's own banner text, so a
+ * same-AMC switch matches the AMFI-backed catalogue the destination list is drawn from.
+ */
+const OPEN = { scheme_transaction_effective_start_date: "2013-05-24T00:00:00", scheme_transaction_effective_end_date: "2037-12-31T00:00:00" };
+const MASTER = {
+  "PP001ZG-GR": {
+    scheme_name: "PARAG PARIKH FLEXI CAP FUND - DIRECT PLAN GROWTH",
+    scheme_isin: "INF879O01027",
+    scheme_bse_code: "PP001ZG-GR",
+    scheme_amc_name: "PPFAS Mutual Fund",
+    scheme_category: "Equity",
+    is_active: true,
+    scheme_offer_status: "OPEN",
+    lumpsum: ["Purchase", "Redemption", "Switch-IN", "Switch-OUT"].map((t) => ({ scheme_transaction_type: t, ...OPEN })),
+    systematic: ["SIP", "SWP", "STP-IN", "STP-OUT"].map((t) => ({
+      scheme_transaction_type: t,
+      scheme_sxp_frequency: "Monthly",
+      scheme_transaction_allowed_options: { scheme_sxp_registration_allowed: true },
+      ...OPEN,
+    })),
+  },
+};
+
+/** A canned master row for a book scheme, or null (and always null outside QA). */
+const qaScheme = (code) => (enabled() && MASTER[String(code || "").trim().toUpperCase()]) || null;
+
 const order = (ucc, id, scheme, { months, days, amount, nav, type = "P", status = "ALLOTTED", remarks = "" }) => ({
   ...scheme,
   id,
@@ -150,6 +186,8 @@ function seed(ucc) {
         current_value: 0,
       }),
     ],
+    // Audit #22 — auto-debit mandates registered against this book. Empty until one is.
+    mandates: [],
   };
 }
 
@@ -210,12 +248,17 @@ function bookFor(reqObj) {
   // does the order-detail lookup behind a history row.
   const reg = blob.match(/QA(?:SIP|SWP|STP)\d+/)?.[0] || null;
   const id = Number(reqObj?.data?.id ?? reqObj?.data?.order_id);
-  if (!reg && !Number.isFinite(id)) return null;
+  // mandate_get / link_mandate / mandate_cancel carry a mandate id and nothing else.
+  const mandates = [reqObj?.data?.exch_mandate_id, ...(Array.isArray(reqObj?.data?.ids) ? reqObj.data.ids : [])]
+    .map(Number)
+    .filter(Number.isFinite);
+  if (!reg && !Number.isFinite(id) && !mandates.length) return null;
 
   for (const ucc of uccList()) {
     const b = book(ucc);
     if (reg && b?.sxp.some((s) => s.reg_no === reg)) return [ucc, b];
     if (Number.isFinite(id) && b?.orders.some((o) => o.id === id)) return [ucc, b];
+    if (mandates.some((m) => b?.mandates.some((x) => x.exch_mandate_id === m))) return [ucc, b];
   }
   return null;
 }
@@ -305,6 +348,9 @@ function answer(serviceMethod, reqObj) {
       const reg = `${prefix}${String(1000 + b.sxp.length)}`;
       const scheme =
         Object.values(SCHEMES).find((s) => s.scheme === String(d.src_scheme || d.scheme || "")) || SCHEMES.equity;
+      // Audit #22 — a new registration has a mandate only if one was named, and then it is
+      // that mandate's own status, not the seeded rows' blanket "APPROVED".
+      const mandate = b.mandates.find((m) => m.exch_mandate_id === Number(d.exch_mandate_id));
       b.sxp.push(
         sxp(ucc, reg, scheme, {
           sxp_type: type,
@@ -315,6 +361,8 @@ function answer(serviceMethod, reqObj) {
           current_value: 0,
           freq: d.freq || "m",
           txn_date: d.txn_date || 10,
+          mandate_status: mandate ? mandate.status : undefined,
+          exch_mandate_id: mandate ? mandate.exch_mandate_id : undefined,
         })
       );
       return { status: "success", message: "Registration created.", data: { reg_no: reg, lists: [{ reg_no: reg }] } };
@@ -324,21 +372,100 @@ function answer(serviceMethod, reqObj) {
     // next load rather than vanishing into a success toast.
     case "purchaseNewOrder": {
       const o = reqObj?.data?.orders?.[0] || {};
-      const scheme = Object.values(SCHEMES).find((s) => s.scheme === String(o.scheme || "")) || SCHEMES.equity;
+      const known = Object.values(SCHEMES).find((s) => s.scheme === String(o.scheme || ""));
       const id = 910000 + b.orders.length;
-      b.orders.unshift(
-        order(ucc, id, scheme, {
-          days: 0,
-          amount: Number(o.amount || 0) || 1000,
-          nav: 75.0,
-          type: String(o.type || "P").toUpperCase() === "R" ? "R" : "P",
-          status: "ACCEPTED",
-        })
-      );
+      // A purchase into a scheme outside the book (a basket leg, an approved order placed from
+      // Orders) is filed under its OWN code with no units: BSE has accepted it, nothing is
+      // allotted yet. Filing it under the equity fund made one fund's order show as another's.
+      const row = known
+        ? order(ucc, id, known, {
+            days: 0,
+            amount: Number(o.amount || 0) || 1000,
+            nav: 75.0,
+            type: String(o.type || "P").toUpperCase() === "R" ? "R" : "P",
+            status: "ACCEPTED",
+          })
+        : {
+            ...order(ucc, id, { scheme: String(o.scheme || ""), scheme_isin: "", src_scheme_name: String(o.scheme || ""), scheme_category: "", folio_num: "" }, {
+              days: 0,
+              amount: Number(o.amount || 0) || 1000,
+              nav: 1,
+              type: String(o.type || "P").toUpperCase(),
+              status: "ACCEPTED",
+            }),
+            units: 0,
+            nav: 0,
+          };
+      b.orders.unshift(row);
       return {
         status: "success",
         data: { items: [{ id, mem_ord_ref_id: o.mem_ord_ref_id || String(id) }] },
       };
+    }
+
+    // Audit #49 — cancelling a purchase BSE has accepted but not allotted. Allotted, rejected
+    // and cancelled orders answer the way BSE does: not allowed.
+    case "cancelPurchaseOrder": {
+      const id = Number(reqObj?.data?.id);
+      const row = b.orders.find((o) => o.id === id);
+      if (!row) return null;
+      if (/ALLOT|REJECT|CANCEL/.test(String(row.status))) {
+        return { status: "error", messages: [{ field: "order", errcode: "not_allowed" }] };
+      }
+      row.status = "CANCELLED";
+      row.remarks = "Cancelled by investor";
+      return { status: "success", message: "Order cancelled.", data: { id } };
+    }
+
+    // Audit #22 — mandates. There is no bank page behind this book, so a registration comes
+    // back PENDING with a link to Manage SIP as the stand-in for "approve it at your bank", and
+    // the first status read reports it approved, as if the investor had done so. UPI AutoPay
+    // is approved in the investor's UPI app, so it gets no link — exactly like the real thing.
+    case "registerMandate": {
+      const d = reqObj?.data || {};
+      const row = {
+        exch_mandate_id: 880001 + b.mandates.length,
+        ucc,
+        status: "PENDING",
+        type: d.type,
+        mode: d.mode,
+        amount: Number(d.amount) || 0,
+      };
+      b.mandates.push(row);
+      return {
+        status: "success",
+        data: {
+          exch_mandate_id: row.exch_mandate_id,
+          status: row.status,
+          ...(d.type === "U" ? {} : { mandate_auth_link: "/mutual_fund/manage-sip" }),
+        },
+      };
+    }
+
+    case "getMandate": {
+      const row = b.mandates.find((m) => m.exch_mandate_id === Number(reqObj?.data?.exch_mandate_id));
+      if (!row) return null;
+      if (row.status === "PENDING") row.status = "APPROVED";
+      return { status: "success", data: { ...row } };
+    }
+
+    case "getAllMandate":
+      return ok(b.mandates);
+
+    case "linkMandate": {
+      const row = b.mandates.find((m) => m.exch_mandate_id === Number(reqObj?.data?.exch_mandate_id));
+      const reg = b.sxp.find((s) => s.reg_no === String(reqObj?.data?.reg_no || ""));
+      if (!row || !reg) return null;
+      reg.exch_mandate_id = row.exch_mandate_id;
+      return { status: "success", message: "Mandate linked.", data: { reg_no: reg.reg_no } };
+    }
+
+    case "cancelMandate": {
+      const ids = (reqObj?.data?.ids || []).map(Number);
+      const rows = b.mandates.filter((m) => ids.includes(m.exch_mandate_id));
+      if (!rows.length) return null;
+      rows.forEach((m) => (m.status = "CANCELLED"));
+      return { status: "success", message: "Mandate cancelled." };
     }
 
     default:
@@ -351,4 +478,4 @@ function reset() {
   books.clear();
 }
 
-module.exports = { answer, reset, enabled };
+module.exports = { answer, reset, enabled, qaScheme };

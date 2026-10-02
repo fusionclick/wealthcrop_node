@@ -16,12 +16,9 @@ function resolveBseBaseUrl(rawInput = process.env.BSE_BASE_URL) {
 
 const baseUrl = resolveBseBaseUrl();
 
-if (baseUrl.includes("starmfv2demo") || process.env.BSE_TLS_INSECURE === "1") {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-  const https = require("https");
-  const axios = require("axios");
-  axios.defaults.httpsAgent = new https.Agent({ rejectUnauthorized: false });
-}
+// Certificate verification applies to UAT too; never weaken every outbound request.
+const bseHttpsAgent = new (require("https").Agent)({ rejectUnauthorized: true });
+exports.bseHttpsAgent = bseHttpsAgent;
 
 const PROD_INVESTOR = "https://admin.wealthcrop.co/api/internal/investor-data";
 

@@ -23,16 +23,33 @@ const TTL_MS = 5 * 60 * 1000;
 
 // Env is the seed, not the authority: whatever the admin panel says wins the moment it
 // answers once.
+//
+// Audit #34 — no default company name. The legal entity is the client's fact; a made-up
+// default would print a registration claim for a company nobody configured.
 const FALLBACK = {
-  legal_entity: process.env.LEGAL_ENTITY_NAME || "Wealthcrop Advisory Pvt Ltd",
+  legal_entity: String(process.env.LEGAL_ENTITY_NAME || "").trim(),
   arn: String(process.env.DISTRIBUTOR_ARN || "").trim().toUpperCase(),
   sub_br_code: String(process.env.DISTRIBUTOR_SUB_BROKER_CODE || "").trim(),
   commission_url: String(process.env.COMMISSION_STRUCTURE_URL || "").trim(),
   commission_version: String(process.env.COMMISSION_STRUCTURE_VERSION || "").trim(),
+  // Audit #33 — the RM register. Empty until the panel answers, so an RM-assisted order
+  // cannot be placed against a register nobody has confirmed (fails closed).
+  rms: [],
 };
-FALLBACK.line = FALLBACK.arn
-  ? `${FALLBACK.legal_entity} | AMFI-registered Mutual Fund Distributor | ARN: ${FALLBACK.arn}`
-  : "";
+FALLBACK.line = identityLine(FALLBACK.legal_entity, FALLBACK.arn);
+
+// Built here rather than trusted from the wire, and only when BOTH halves exist: half a line
+// ("… | ARN: " or " | AMFI-registered …") is a false claim, an absent one is merely missing.
+function identityLine(entity, arn) {
+  return entity && arn ? `${entity} | AMFI-registered Mutual Fund Distributor | ARN: ${arn}` : "";
+}
+
+/** [{ euin, name }] with a well-formed EUIN, whatever shape the panel sent. */
+function rmRegister(list) {
+  return (Array.isArray(list) ? list : [])
+    .map((r) => ({ euin: String(r?.euin || "").trim().toUpperCase(), name: String(r?.name || "").trim() }))
+    .filter((r) => /^E\d{6}$/.test(r.euin));
+}
 
 let cache = { at: 0, value: FALLBACK };
 let inFlight = null;
@@ -48,11 +65,10 @@ async function load() {
       legal_entity: entity,
       arn,
       sub_br_code: String(d.sub_br_code || "").trim(),
-      // Built here rather than trusted from the wire, so a half-filled settings row cannot
-      // produce "… | ARN: " on every screen.
-      line: arn ? `${entity} | AMFI-registered Mutual Fund Distributor | ARN: ${arn}` : "",
+      line: identityLine(entity, arn),
       commission_url: String(d.commission_url || "").trim(),
       commission_version: String(d.commission_version || "").trim(),
+      rms: rmRegister(d.rms),
     },
   };
 }
@@ -80,4 +96,4 @@ async function getDistributor() {
 /** Synchronous read for the order path, which cannot await on every payload. */
 const cachedDistributor = () => cache.value;
 
-module.exports = { getDistributor, cachedDistributor };
+module.exports = { getDistributor, cachedDistributor, identityLine, rmRegister };

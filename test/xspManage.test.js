@@ -1,5 +1,19 @@
-const { describe, it, beforeEach } = require("node:test");
+const { describe, it, beforeEach, before, after } = require("node:test");
 const assert = require("node:assert/strict");
+const http = require("node:http");
+const laravel = http.createServer((req, res) => {
+  req.resume();
+  req.on('end', () => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: true, data: { conservative: 3, moderate: 4, aggressive: 6 } }));
+  });
+});
+before(async () => {
+  await new Promise((resolve) => laravel.listen(0, '127.0.0.1', resolve));
+  require('../src/config').configData.investorUrl = `http://127.0.0.1:${laravel.address().port}/investor-data`;
+  controller.lookupScheme = async (code) => ({ scheme_bse_code: code, scheme_name: 'Test Regular Fund', scheme_riskometer: 'Moderate' });
+});
+after(() => laravel.close());
 
 const {
   xspRegNo,
@@ -160,6 +174,7 @@ const fakeRes = () => {
 // A modification registers a fresh SIP, so it goes through the same ticket-22 disclaimer
 // and ticket-24 suitability gates a purchase does. Every request here carries both.
 const reqFor = (data) => ({
+  headers: { authorization: 'Bearer test-investor' },
   ucc: "UCC-A",
   investor: { email: "a@example.com", kyc: {}, riskProfile: { profile: "Aggressive" } },
   body: { data: { acknowledged: REQUIRED_ACKS, ...data } },
@@ -369,8 +384,10 @@ describe("ticket 22: registering a SWP requires the acknowledgement", () => {
   // IS a considered act set up in advance, so ticket 22 applies, and the one-off redemption
   // remains available if /disclaimers is down.
   const swp = (over = {}, dataOver = {}) => ({
+    headers: { authorization: 'Bearer test-investor' },
     ucc: "UCC-A",
-    investor: { email: "a@example.com", kyc: {}, riskProfile: null },
+    // Audit #42: an SWP now needs a verified PAN; the refusal is in transactions.e2e.test.js.
+    investor: { email: "a@example.com", kyc: {}, riskProfile: null, profile: { pan_verified: true } },
     body: {
       data: {
         sxp_type: "swp",

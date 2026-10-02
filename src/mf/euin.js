@@ -15,11 +15,11 @@
  * E234123** and **ARN-873456**, and the SIP fixture carried **E000001**. None of those
  * numbers belong to this distributor.
  *
- * This platform has no relationship-manager concept: nothing in any of the three repos
- * assigns an employee to an investor, and no screen offers "placed with assistance". So
- * every trade here IS execution-only, and that is what goes out — but the shape is written
- * to take an EUIN the day an RM module exists, and `memDetails` refuses the illegal pair
- * rather than trusting the caller to remember.
+ * Audit #33 — the RM-assisted path. The admin keeps a register of relationship managers
+ * (Admin → Settings → Distributor), the checkout offers "assisted by" from that register,
+ * and checkDisclaimers (suitability.js) returns an EUIN only when it is on it. That EUIN is
+ * what the order path passes here; everything else stays execution-only, and `memDetails`
+ * refuses the illegal pair rather than trusting the caller to remember.
  */
 
 // The distributor's own ARN. Never a literal in a payload builder — a wrong ARN in a live
