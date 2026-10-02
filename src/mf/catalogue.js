@@ -184,6 +184,7 @@ async function getMaster(controller) {
 async function coldPage(controller, q, start, length) {
   const res = await fetchPage(controller, start, Math.min(FETCH_MAX, Math.max(length * 2, length)));
   const rows = (res?.data?.lists || []).filter(isTransactable).map((row, i) => mapScheme(row, i));
+  for (const row of rows) applyCached(row);
   const amfi = (await getAmfiNavs()).navs;
   const hidden = await getHidden();
   const navOf = (item) => item.nav ?? navFor(amfi, item.scheme_isin, item.scheme_bse_code);

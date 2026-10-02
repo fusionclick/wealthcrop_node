@@ -8,7 +8,7 @@ const assert = require("node:assert");
 const fs = require("fs");
 const path = require("path");
 
-const { aumCrore, applyCached } = require("../src/mf/kuvera");
+const { aumCrore, applyCached, resetEnrichmentCache } = require("../src/mf/kuvera");
 const { query } = require("../src/mf/catalogue");
 
 test("the feed's unit is ₹10 lakh, so raw/10 is ₹ crore", () => {
@@ -65,4 +65,13 @@ test("every field the filters read is copied onto the INDEX row", () => {
   for (const field of ["risk", "riskRank", "ageYears", "returns", "aum"]) {
     assert.ok(body.includes(`row.${field} =`), `applyCached must set row.${field} — query() filters or sorts on it`);
   }
+});
+
+test("cached expense ratios rank the index before pagination", () => {
+  resetEnrichmentCache({ HIGH: { expense: "2.4" }, LOW: { expense: "1.2" } });
+  try {
+    const rows = [{ scheme_bse_code: "HIGH" }, { scheme_bse_code: "LOW" }];
+    rows.forEach(applyCached);
+    assert.strictEqual(query(rows, { sort: "expense", order: "asc", length: 1 }).lists[0].scheme_bse_code, "LOW");
+  } finally { resetEnrichmentCache(); }
 });

@@ -278,6 +278,7 @@ function applyCached(row) {
   if (!extra) return false;
   row.risk = row.risk || extra.risk;
   row.riskRank = extra.riskRank;
+  row.expense = row.expense || extra.expense;
   row.ageYears = extra.ageYears;
   row.inceptionDate = extra.inceptionDate;
   row.fundRating = extra.fundRating;
