@@ -190,7 +190,8 @@ async function coldPage(controller, q, start, length) {
   const shown = rows.filter((item) => !isHidden(hidden, item));
   const priced = shown.filter((item) => navOf(item) != null);
   const cats = await getCategories();
-  const { lists } = query(priced, { ...q, start: 0, length });
+  const ranked = q.sort === "nav" ? priced.map((item) => ({ ...item, nav: navOf(item) })) : priced;
+  const { lists } = query(ranked, { ...q, start: 0, length });
   const list = await enrichRows(
     lists.map((item) => ({
       ...item,

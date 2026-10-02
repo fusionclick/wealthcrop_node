@@ -144,6 +144,20 @@ describe("catalogue", () => {
     const next = await getCatalogue(c, { sort: "nav", order: "asc", start: 1, length: 1 });
     assert.equal(next.list[0].nav, 241.87, "the next NAV-ranked page follows the first");
 
+    delete require.cache[require.resolve("../src/mf/catalogue")];
+    const coldController = controller(20);
+    const fetch = coldController.masterDataService.getSchemeMasterList;
+    const buildDelay = new Promise((resolve) => setTimeout(resolve, 3000));
+    let first = true;
+    coldController.masterDataService.getSchemeMasterList = async (...args) => {
+      if (first) { first = false; await buildDelay; }
+      return fetch(...args);
+    };
+    const cold = await require("../src/mf/catalogue").getCatalogue(coldController, { sort: "nav", order: "asc", length: 20 });
+    assert.equal(cold.warming, true);
+    assert.equal(cold.list[0].nav, 30.5, "the cold page also ranks attached AMFI NAVs");
+    await buildDelay;
+
     amfiMod.getAmfiNavs = realGet;
   });
 });
